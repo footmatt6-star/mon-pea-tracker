@@ -174,15 +174,9 @@ export default function Home() {
 
         {/* ONGLETS */}
         <div style={s.tabs}>
-          {['dashboard', 'positions', 'fiscalite'].map((tab) => (
-            <button
-              key={tab}
-              style={{ ...s.tab, ...(activeTab === tab ? s.tabActive : {}) }}
-              onClick={() => setActiveTab(tab)}
-            >
-              {{ dashboard: 'Tableau de bord', positions: 'Positions', fiscalite: 'Fiscalité' }[tab as any]}
-            </button>
-          ))}
+          <button style={{ ...s.tab, ...(activeTab === 'dashboard' ? s.tabActive : {}) }} onClick={() => setActiveTab('dashboard')}>Tableau de bord</button>
+          <button style={{ ...s.tab, ...(activeTab === 'positions' ? s.tabActive : {}) }} onClick={() => setActiveTab('positions')}>Positions</button>
+          <button style={{ ...s.tab, ...(activeTab === 'fiscalite' ? s.tabActive : {}) }} onClick={() => setActiveTab('fiscalite')}>Fiscalité</button>
         </div>
 
         {/* ONGLET DASHBOARD */}
