@@ -19,11 +19,17 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
+  
+  // States pour les outils
+  const [simMensuel, setSimMensuel] = useState(150);
+  const [calcEtf, setCalcEtf] = useState(POSITIONS[0]?.ticker || '');
+  const [calcQty, setCalcQty] = useState(0);
+  const [calcPrice, setCalcPrice] = useState(0);
 
   const evoChartRef = useRef<HTMLCanvasElement>(null);
-  const pieChartRef = useRef<HTMLCanvasElement>(null);
+  const projChartRef = useRef<HTMLCanvasElement>(null);
   const evoChartInst = useRef<any>(null);
-  const pieChartInst = useRef<any>(null);
+  const projChartInst = useRef<any>(null);
 
   const fetchPrices = useCallback(async () => {
     setLoading(true);
@@ -54,13 +60,14 @@ export default function Home() {
 
   const positions = POSITIONS.map((p) => {
     const info = prices[p.ticker] || {};
-    const prix = info.price || p.pru; // Si prix indisponible, utilise PRU
+    const prix = info.price || p.pru; 
     const valeur = p.qty * prix;
     const investi = p.qty * p.pru;
     const pl = valeur - investi;
     const plPct = investi > 0 ? pl / investi : 0;
     const pvJour = info.change ? p.qty * info.change : 0;
-    return { ...p, prix, valeur, investi, pl, plPct, pvJour, info };
+    const alertDrop = info.changePct && info.changePct < -2; // Alerte si baisse > 2%
+    return { ...p, prix, valeur, investi, pl, plPct, pvJour, info, alertDrop };
   });
 
   const totalValeurETF = positions.reduce((s, p) => s + p.valeur, 0);
@@ -70,113 +77,87 @@ export default function Home() {
   const capitalDepose = CONFIG.capitalInitial;
   const performancePct = capitalDepose > 0 ? (totalValeurPF - capitalDepose) / capitalDepose : 0;
   const pvJourTotal = positions.reduce((s, p) => s + p.pvJour, 0);
-  const cagr = anneesOuverture > 0 && capitalDepose > 0 ? Math.pow(totalValeurPF / capitalDepose, 1 / anneesOuverture) - 1 : 0;
 
-  const SOCIAL_CHARGES = 0.172;
-  const gainsBruts = totalPL;
-  const gainsBrutsPositifs = Math.max(0, gainsBruts);
-  const fiscalite5ans = gainsBrutsPositifs * SOCIAL_CHARGES;
-  const gainsNets5ans = gainsBrutsPositifs - fiscalite5ans;
+  // Calculateur PRU
+  const targetPos = positions.find(p => p.ticker === calcEtf);
+  const newPru = targetPos && calcQty > 0 ? ((targetPos.qty * targetPos.pru) + (calcQty * calcPrice)) / (targetPos.qty + calcQty) : 0;
+
+  // Calculs Projections (3 scénarios)
+  const projeter = (taux: number) => {
+    let v = totalValeurPF;
+    const res = [];
+    for(let i=0; i<=15; i++) {
+      res.push(v);
+      v = v * Math.pow(1 + taux/100, 1) + (simMensuel * 12);
+    }
+    return res;
+  };
 
   useEffect(() => {
-    if (activeTab !== 'dashboard') return;
-    import('chart.js/auto').then((mod) => {
-      const Chart = mod.default || mod.Chart;
-
-      if (evoChartInst.current) evoChartInst.current.destroy();
-      if (evoChartRef.current) {
-        const sortedHist = [...HISTORY].sort((a, b) => a.mois.localeCompare(b.mois));
-        evoChartInst.current = new Chart(evoChartRef.current, {
-          type: 'line',
-          data: {
-            labels: sortedHist.map((h) => fdate(h.mois)),
-            datasets: [
-              {
-                label: 'Valeur PEA',
-                data: sortedHist.map((h) => h.valeur),
-                borderColor: '#e8a45d',
-                backgroundColor: 'rgba(232,164,93,0.08)',
-                borderWidth: 2.5,
-                pointRadius: 4,
-                pointBackgroundColor: '#e8a45d',
-                tension: 0.4,
-                fill: true,
-              },
-              {
-                label: 'Capital investi',
-                data: sortedHist.map((h) => h.depot),
-                borderColor: '#3a3a4a',
-                borderDash: [5, 4],
-                borderWidth: 1.5,
-                pointRadius: 0,
-                tension: 0.1,
-                fill: false,
-              },
-            ],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
-            scales: {
-              x: { grid: { color: 'rgba(255,255,255,0.04)' } },
-              y: { grid: { color: 'rgba(255,255,255,0.04)' } },
+    if (activeTab === 'dashboard') {
+        import('chart.js/auto').then((mod) => {
+        const Chart = mod.default || mod.Chart;
+        if (evoChartInst.current) evoChartInst.current.destroy();
+        if (evoChartRef.current) {
+            const sortedHist = [...HISTORY].sort((a, b) => a.mois.localeCompare(b.mois));
+            evoChartInst.current = new Chart(evoChartRef.current, {
+            type: 'line',
+            data: {
+                labels: sortedHist.map((h) => fdate(h.mois)),
+                datasets: [
+                { label: 'Valeur', data: sortedHist.map((h) => h.valeur), borderColor: '#e8a45d', backgroundColor: 'rgba(232,164,93,0.1)', fill: true, tension: 0.4 },
+                { label: 'Capital', data: sortedHist.map((h) => h.depot), borderColor: '#3a3a4a', borderDash: [5, 5], fill: false }
+                ]
             },
-          },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+            });
+        }
         });
-      }
+    }
 
-      if (pieChartInst.current) pieChartInst.current.destroy();
-      if (pieChartRef.current) {
-        pieChartInst.current = new Chart(pieChartRef.current, {
-          type: 'doughnut',
-          data: {
-            labels: [...positions.map((p) => p.nom), 'Liquidités'],
-            datasets: [{
-              data: [...positions.map((p) => p.valeur), CONFIG.liquidites],
-              backgroundColor: [...positions.map((p) => p.couleur), '#3a3a4a'],
-              borderWidth: 0,
-            }],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: '68%',
-            plugins: { legend: { display: false } },
-          },
+    if (activeTab === 'outils') {
+        import('chart.js/auto').then((mod) => {
+        const Chart = mod.default || mod.Chart;
+        if (projChartInst.current) projChartInst.current.destroy();
+        if (projChartRef.current) {
+            projChartInst.current = new Chart(projChartRef.current, {
+            type: 'line',
+            data: {
+                labels: Array.from({length: 16}, (_, i) => new Date().getFullYear() + i),
+                datasets: [
+                { label: 'Optimiste (12%)', data: projeter(12), borderColor: '#3dd68c', borderDash: [2, 2], tension: 0.4, pointRadius: 0 },
+                { label: 'Réaliste (8%)', data: projeter(8), borderColor: '#e8a45d', tension: 0.4, borderWidth: 3 },
+                { label: 'Pessimiste (5%)', data: projeter(5), borderColor: '#f05656', borderDash: [2, 2], tension: 0.4, pointRadius: 0 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
         });
-      }
-    });
+    }
 
     return () => {
       if (evoChartInst.current) evoChartInst.current.destroy();
-      if (pieChartInst.current) pieChartInst.current.destroy();
+      if (projChartInst.current) projChartInst.current.destroy();
     };
-  }, [activeTab, prices]);
+  }, [activeTab, prices, simMensuel]);
 
   return (
       <div style={s.root}>
         {/* HEADER */}
         <div style={s.header}>
           <div>
-            <div style={s.logo}>Mon PEA · Mathis</div>
-            <div style={s.sublogo}>
-              {loading ? 'Sync en cours…' : lastSync ? 'Mis à jour ' + lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-            </div>
+            <div style={s.logo}>Mon PEA · Mathis 🚀</div>
+            <div style={s.sublogo}>{loading ? 'Sync en cours…' : lastSync ? 'Mis à jour ' + lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ ...s.dot, background: loading ? '#e8a45d' : '#3dd68c' }} />
-            <button style={s.btn} onClick={fetchPrices} disabled={loading}>
-              {loading ? '…' : '↻ Sync'}
-            </button>
-          </div>
+          <button style={s.btn} onClick={fetchPrices} disabled={loading}>{loading ? '…' : '↻ Sync'}</button>
         </div>
 
         {/* ONGLETS */}
         <div style={s.tabs}>
           <button style={{ ...s.tab, ...(activeTab === 'dashboard' ? s.tabActive : {}) }} onClick={() => setActiveTab('dashboard')}>Tableau de bord</button>
           <button style={{ ...s.tab, ...(activeTab === 'positions' ? s.tabActive : {}) }} onClick={() => setActiveTab('positions')}>Positions</button>
-          <button style={{ ...s.tab, ...(activeTab === 'fiscalite' ? s.tabActive : {}) }} onClick={() => setActiveTab('fiscalite')}>Fiscalité</button>
+          <button style={{ ...s.tab, ...(activeTab === 'outils' ? s.tabActive : {}) }} onClick={() => setActiveTab('outils')}>Outils & Projections</button>
         </div>
 
         {/* ONGLET DASHBOARD */}
@@ -185,36 +166,19 @@ export default function Home() {
             <div style={s.heroCard}>
               <div style={s.heroLabel}>Valeur totale du PEA</div>
               <div style={s.heroVal}>{f2(totalValeurPF)} €</div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
-                <span style={{ ...s.badge, ...s.badgeAmber }}>
-                  {pvJourTotal >= 0 ? '↗' : '↘'} {pvJourTotal >= 0 ? '+' : ''}{f2(pvJourTotal)} € aujourd'hui
-                </span>
-                <span style={{ ...s.badge, ...(performancePct >= 0 ? s.badgeGreen : s.badgeRed) }}>
-                  {fp(performancePct * 100)} depuis ouverture
-                </span>
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <span style={{ ...s.badge, ...s.badgeAmber }}>{pvJourTotal >= 0 ? '↗' : '↘'} {pvJourTotal >= 0 ? '+' : ''}{f2(pvJourTotal)} € ajd</span>
+                <span style={{ ...s.badge, ...(performancePct >= 0 ? s.badgeGreen : s.badgeRed) }}>{fp(performancePct * 100)} global</span>
               </div>
             </div>
-
             <div style={s.kpiGrid}>
-              <KpiCard label="Capital déposé" value={f2(capitalDepose) + ' €'} sub="Total" />
-              <KpiCard label="Liquidités" value={f2(CONFIG.liquidites) + ' €'} sub="Cash disponible" />
-              <KpiCard label="Valeur investie" value={f2(totalValeurETF) + ' €'} sub={`${positions.length} ETF`} />
+              <KpiCard label="Capital déposé" value={f2(capitalDepose) + ' €'} />
+              <KpiCard label="Liquidités" value={f2(CONFIG.liquidites) + ' €'} />
               <KpiCard label="Plus-value" value={(totalPL >= 0 ? '+' : '') + f2(totalPL) + ' €'} color={totalPL >= 0 ? '#3dd68c' : '#f05656'} />
             </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
-              <div style={s.card}>
-                <div style={s.cardTitle}>Évolution du patrimoine</div>
-                <div style={{ height: 220, position: 'relative' }}>
-                  <canvas ref={evoChartRef} />
-                </div>
-              </div>
-              <div style={s.card}>
-                <div style={s.cardTitle}>Répartition</div>
-                <div style={{ height: 220, position: 'relative' }}>
-                  <canvas ref={pieChartRef} />
-                </div>
-              </div>
+            <div style={s.card}>
+              <div style={s.cardTitle}>Évolution du patrimoine</div>
+              <div style={{ height: 250, position: 'relative' }}><canvas ref={evoChartRef} /></div>
             </div>
           </div>
         )}
@@ -223,22 +187,18 @@ export default function Home() {
         {activeTab === 'positions' && (
           <div style={s.page}>
             <div style={s.card}>
-              <div style={s.cardTitle}>Mes positions</div>
+              <div style={s.cardTitle}>Mes ETF</div>
               <div style={{ overflowX: 'auto' }}>
                 <table style={s.table}>
-                  <thead>
-                    <tr>
-                      {['ETF', 'Qté', 'PRU', 'Cours', 'Valeur', 'P/L €'].map((h) => <th key={h} style={s.th}>{h}</th>)}
-                    </tr>
-                  </thead>
+                  <thead><tr>{['ETF', 'Qté', 'PRU', 'Cours', 'Jour', 'P/L €'].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
                   <tbody>
                     {positions.map((p) => (
                       <tr key={p.id}>
-                        <td style={s.td}>{p.nom}</td>
+                        <td style={s.td}>{p.nom} {p.alertDrop && <span title="Baisse > 2% ajd" style={{color: '#f05656'}}>⚠️</span>}</td>
                         <td style={s.td}>{p.qty}</td>
                         <td style={s.td}>{f2(p.pru)} €</td>
-                        <td style={s.td}>{p.info.ok ? f2(p.prix) + ' €' : '–'}</td>
-                        <td style={s.td}>{f2(p.valeur)} €</td>
+                        <td style={s.td}>{f2(p.prix)} €</td>
+                        <td style={{ ...s.td, color: (p.info.changePct ?? 0) >= 0 ? '#3dd68c' : '#f05656' }}>{fp(p.info.changePct)}</td>
                         <td style={{ ...s.td, color: p.pl >= 0 ? '#3dd68c' : '#f05656' }}>{p.pl >= 0 ? '+' : ''}{f2(p.pl)} €</td>
                       </tr>
                     ))}
@@ -249,14 +209,37 @@ export default function Home() {
           </div>
         )}
 
-        {/* ONGLET FISCALITE */}
-        {activeTab === 'fiscalite' && (
+        {/* ONGLET OUTILS (NOUVEAU) */}
+        {activeTab === 'outils' && (
           <div style={s.page}>
-            <div style={s.card}>
-              <div style={s.cardTitle}>Fiscalité PEA</div>
-              <FiscRow label="Plus-value latente brute" value={(gainsBruts >= 0 ? '+' : '') + f2(gainsBruts) + ' €'} color={gainsBruts >= 0 ? '#3dd68c' : '#f05656'} />
-              <FiscRow label="Prélèvements sociaux (17,2%)" value={f2(fiscalite5ans) + ' €'} color="#f05656" />
-              <FiscRow label="Gain NET (après 5 ans)" value={f2(gainsNets5ans) + ' €'} color="#3dd68c" bold />
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+              
+              {/* Calculateur PRU */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>Calculateur de PRU (Nouvel Achat)</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <select style={s.input} value={calcEtf} onChange={(e) => setCalcEtf(e.target.value)}>
+                    {positions.map(p => <option key={p.ticker} value={p.ticker}>{p.nom}</option>)}
+                  </select>
+                  <input type="number" placeholder="Nombre de parts achetées" style={s.input} onChange={(e) => setCalcQty(Number(e.target.value))} />
+                  <input type="number" placeholder="Prix unitaire d'achat (€)" style={s.input} onChange={(e) => setCalcPrice(Number(e.target.value))} />
+                  {calcQty > 0 && calcPrice > 0 && (
+                    <div style={{ marginTop: 10, padding: 12, background: 'rgba(61,214,140,0.1)', borderRadius: 8, border: '1px solid #3dd68c' }}>
+                      <p style={{ fontSize: 12, color: '#aaa' }}>Nouveau PRU à copier dans config.ts :</p>
+                      <p style={{ fontSize: 24, fontWeight: 'bold', color: '#3dd68c' }}>{f2(newPru)} €</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Simulateur */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>Simulateur de Projection (15 ans)</div>
+                <label style={{ fontSize: 12, color: '#aaa' }}>Versement mensuel prévu : <strong style={{color: '#fff'}}>{simMensuel} €</strong></label>
+                <input type="range" min="0" max="1000" step="50" value={simMensuel} onChange={(e) => setSimMensuel(Number(e.target.value))} style={{ width: '100%', marginTop: 10 }} />
+                <div style={{ height: 220, position: 'relative', marginTop: 16 }}><canvas ref={projChartRef} /></div>
+              </div>
+
             </div>
           </div>
         )}
@@ -264,33 +247,20 @@ export default function Home() {
   );
 }
 
-// ── Composants helper ─────────────────────────────────────────
-function KpiCard({ label, value, sub, color }: any) {
+function KpiCard({ label, value, color }: any) {
   return (
     <div style={s.kpiCard}>
       <div style={s.kpiLabel}>{label}</div>
       <div style={{ ...s.kpiVal, ...(color ? { color } : {}) }}>{value}</div>
-      {sub && <div style={s.kpiSub}>{sub}</div>}
     </div>
   );
 }
 
-function FiscRow({ label, value, color, bold }: any) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-      <span style={{ fontSize: 13, color: '#aaa' }}>{label}</span>
-      <span style={{ fontSize: 13, fontWeight: bold ? 600 : 400, color: color || '#f0f0f2' }}>{value}</span>
-    </div>
-  );
-}
-
-// ── Styles ────────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
   root: { background: '#0d0d0f', color: '#f0f0f2', minHeight: '100vh', fontFamily: '-apple-system, sans-serif' },
   header: { padding: '18px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '0.5px solid #1e1e28' },
   logo: { fontSize: 17, fontWeight: 600 },
   sublogo: { fontSize: 11, color: '#555', marginTop: 2 },
-  dot: { width: 7, height: 7, borderRadius: '50%', flexShrink: 0 },
   btn: { background: 'rgba(232,164,93,0.1)', border: '0.5px solid rgba(232,164,93,0.4)', color: '#e8a45d', padding: '7px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer' },
   tabs: { display: 'flex', gap: 2, background: '#161619', padding: '4px 24px 0', borderBottom: '0.5px solid #1e1e28' },
   tab: { padding: '10px 16px', fontSize: 14, border: 'none', background: 'none', color: '#555', cursor: 'pointer', borderBottom: '2px solid transparent' },
@@ -307,10 +277,10 @@ const s: Record<string, React.CSSProperties> = {
   kpiCard: { background: '#161619', border: '0.5px solid #1e1e28', borderRadius: 10, padding: '12px 14px' },
   kpiLabel: { fontSize: 10, color: '#555', textTransform: 'uppercase', marginBottom: 6 },
   kpiVal: { fontSize: 18, fontWeight: 500 },
-  kpiSub: { fontSize: 10, color: '#555', marginTop: 3 },
   card: { background: '#161619', border: '0.5px solid #1e1e28', borderRadius: 12, padding: '14px 16px' },
-  cardTitle: { fontSize: 11, fontWeight: 500, color: '#555', textTransform: 'uppercase', marginBottom: 12 },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12.5 },
-  th: { textAlign: 'left', padding: '7px 10px', fontSize: 10, color: '#555', borderBottom: '0.5px solid #1e1e28', textTransform: 'uppercase' },
-  td: { padding: '10px 10px', color: '#f0f0f2' }
+  cardTitle: { fontSize: 12, fontWeight: 600, color: '#aaa', textTransform: 'uppercase', marginBottom: 12 },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13 },
+  th: { textAlign: 'left', padding: '8px 10px', fontSize: 11, color: '#555', borderBottom: '0.5px solid #1e1e28', textTransform: 'uppercase' },
+  td: { padding: '10px 10px', color: '#f0f0f2', borderBottom: '0.5px solid #1a1a22' },
+  input: { background: '#0d0d0f', border: '1px solid #1e1e28', padding: '10px', borderRadius: '8px', color: '#fff', width: '100%' }
 };
