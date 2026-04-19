@@ -359,4 +359,4 @@ const s: Record<string, React.CSSProperties> = {
   th: { textAlign: 'left', padding: '8px 10px', fontSize: 11, color: '#555', borderBottom: '0.5px solid #1e1e28', textTransform: 'uppercase' },
   td: { padding: '10px 10px', color: '#f0f0f2', borderBottom: '0.5px solid #1a1a22' },
   input: { background: '#0d0d0f', border: '1px solid #1e1e28', padding: '10px', borderRadius: '8px', color: '#fff', width: '100%' }
-};
+}
