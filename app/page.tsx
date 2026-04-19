@@ -20,7 +20,7 @@ export default function Home() {
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   
-  // States pour les outils
+  // States Outils
   const [simMensuel, setSimMensuel] = useState(150);
   const [calcEtf, setCalcEtf] = useState(POSITIONS[0]?.ticker || '');
   const [calcQty, setCalcQty] = useState(0);
@@ -34,7 +34,8 @@ export default function Home() {
   const fetchPrices = useCallback(async () => {
     setLoading(true);
     try {
-      const tickers = POSITIONS.map((p) => p.ticker).join(',');
+      // On ajoute les indices (CAC40 et S&P500) à la requête Yahoo de base !
+      const tickers = [...POSITIONS.map(p => p.ticker), '^FCHI', '^GSPC'].join(',');
       const res = await fetch(`/api/prices?tickers=${tickers}`);
       const data = await res.json();
       setPrices(data);
@@ -54,6 +55,7 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [fetchPrices]);
 
+  // Calculs Globaux
   const now = new Date();
   const dateOpen = new Date(CONFIG.dateOuverture);
   const anneesOuverture = yearsBetween(dateOpen, now);
@@ -66,7 +68,7 @@ export default function Home() {
     const pl = valeur - investi;
     const plPct = investi > 0 ? pl / investi : 0;
     const pvJour = info.change ? p.qty * info.change : 0;
-    const alertDrop = info.changePct && info.changePct < -2; // Alerte si baisse > 2%
+    const alertDrop = info.changePct && info.changePct < -2;
     return { ...p, prix, valeur, investi, pl, plPct, pvJour, info, alertDrop };
   });
 
@@ -77,12 +79,25 @@ export default function Home() {
   const capitalDepose = CONFIG.capitalInitial;
   const performancePct = capitalDepose > 0 ? (totalValeurPF - capitalDepose) / capitalDepose : 0;
   const pvJourTotal = positions.reduce((s, p) => s + p.pvJour, 0);
-
-  // Calculateur PRU
+  
+  // PRU
   const targetPos = positions.find(p => p.ticker === calcEtf);
   const newPru = targetPos && calcQty > 0 ? ((targetPos.qty * targetPos.pru) + (calcQty * calcPrice)) / (targetPos.qty + calcQty) : 0;
 
-  // Calculs Projections (3 scénarios)
+  // Fiscalité
+  const gainsBruts = totalPL;
+  const fiscalite5ans = Math.max(0, gainsBruts) * 0.172;
+  const gainsNets5ans = Math.max(0, gainsBruts) - fiscalite5ans;
+
+  // Drawdown Max (Pire Chute)
+  let peak = 0;
+  let maxDrawdown = 0;
+  HISTORY.forEach(h => {
+    if (h.valeur > peak) peak = h.valeur;
+    const drawdown = peak > 0 ? (peak - h.valeur) / peak : 0;
+    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+  });
+
   const projeter = (taux: number) => {
     let v = totalValeurPF;
     const res = [];
@@ -144,7 +159,6 @@ export default function Home() {
 
   return (
       <div style={s.root}>
-        {/* HEADER */}
         <div style={s.header}>
           <div>
             <div style={s.logo}>Mon PEA · Mathis 🚀</div>
@@ -153,14 +167,15 @@ export default function Home() {
           <button style={s.btn} onClick={fetchPrices} disabled={loading}>{loading ? '…' : '↻ Sync'}</button>
         </div>
 
-        {/* ONGLETS */}
         <div style={s.tabs}>
           <button style={{ ...s.tab, ...(activeTab === 'dashboard' ? s.tabActive : {}) }} onClick={() => setActiveTab('dashboard')}>Tableau de bord</button>
           <button style={{ ...s.tab, ...(activeTab === 'positions' ? s.tabActive : {}) }} onClick={() => setActiveTab('positions')}>Positions</button>
-          <button style={{ ...s.tab, ...(activeTab === 'outils' ? s.tabActive : {}) }} onClick={() => setActiveTab('outils')}>Outils & Projections</button>
+          <button style={{ ...s.tab, ...(activeTab === 'fiscalite' ? s.tabActive : {}) }} onClick={() => setActiveTab('fiscalite')}>Fiscalité</button>
+          <button style={{ ...s.tab, ...(activeTab === 'outils' ? s.tabActive : {}) }} onClick={() => setActiveTab('outils')}>Projections</button>
+          <button style={{ ...s.tab, ...(activeTab === 'analyse' ? s.tabActive : {}) }} onClick={() => setActiveTab('analyse')}>Analyse Pro 💎</button>
         </div>
 
-        {/* ONGLET DASHBOARD */}
+        {/* DASHBOARD */}
         {activeTab === 'dashboard' && (
           <div style={s.page}>
             <div style={s.heroCard}>
@@ -183,7 +198,7 @@ export default function Home() {
           </div>
         )}
 
-        {/* ONGLET POSITIONS */}
+        {/* POSITIONS */}
         {activeTab === 'positions' && (
           <div style={s.page}>
             <div style={s.card}>
@@ -209,19 +224,32 @@ export default function Home() {
           </div>
         )}
 
-        {/* ONGLET OUTILS (NOUVEAU) */}
+        {/* FISCALITE (RETROUVÉ !) */}
+        {activeTab === 'fiscalite' && (
+          <div style={s.page}>
+            <div style={s.card}>
+              <div style={s.cardTitle}>Fiscalité PEA</div>
+              <FiscRow label="Plus-value latente brute" value={(gainsBruts >= 0 ? '+' : '') + f2(gainsBruts) + ' €'} color={gainsBruts >= 0 ? '#3dd68c' : '#f05656'} />
+              <FiscRow label="Prélèvements sociaux (17,2%)" value={f2(fiscalite5ans) + ' €'} color="#f05656" />
+              <FiscRow label="Gain NET (après 5 ans)" value={f2(gainsNets5ans) + ' €'} color="#3dd68c" bold />
+              <div style={{ marginTop: 16, fontSize: 12, color: '#aaa', padding: 12, background: '#1e1e28', borderRadius: 8 }}>
+                Rappel : Les retraits avant 5 ans entraînent la clôture du PEA et une imposition à 30% (PFU).
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* OUTILS / PROJECTIONS */}
         {activeTab === 'outils' && (
           <div style={s.page}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-              
-              {/* Calculateur PRU */}
               <div style={s.card}>
                 <div style={s.cardTitle}>Calculateur de PRU (Nouvel Achat)</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <select style={s.input} value={calcEtf} onChange={(e) => setCalcEtf(e.target.value)}>
                     {positions.map(p => <option key={p.ticker} value={p.ticker}>{p.nom}</option>)}
                   </select>
-                  <input type="number" placeholder="Nombre de parts achetées" style={s.input} onChange={(e) => setCalcQty(Number(e.target.value))} />
+                  <input type="number" placeholder="Nombre de parts" style={s.input} onChange={(e) => setCalcQty(Number(e.target.value))} />
                   <input type="number" placeholder="Prix unitaire d'achat (€)" style={s.input} onChange={(e) => setCalcPrice(Number(e.target.value))} />
                   {calcQty > 0 && calcPrice > 0 && (
                     <div style={{ marginTop: 10, padding: 12, background: 'rgba(61,214,140,0.1)', borderRadius: 8, border: '1px solid #3dd68c' }}>
@@ -232,12 +260,51 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Simulateur */}
               <div style={s.card}>
                 <div style={s.cardTitle}>Simulateur de Projection (15 ans)</div>
                 <label style={{ fontSize: 12, color: '#aaa' }}>Versement mensuel prévu : <strong style={{color: '#fff'}}>{simMensuel} €</strong></label>
                 <input type="range" min="0" max="1000" step="50" value={simMensuel} onChange={(e) => setSimMensuel(Number(e.target.value))} style={{ width: '100%', marginTop: 10 }} />
                 <div style={{ height: 220, position: 'relative', marginTop: 16 }}><canvas ref={projChartRef} /></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ANALYSE PRO (NIVEAU 2) */}
+        {activeTab === 'analyse' && (
+          <div style={s.page}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+              
+              {/* Benchmarks */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>Comparaison Marché (Aujourd'hui)</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <FiscRow label="📈 Ton PEA" value={fp((pvJourTotal / totalValeurPF) * 100)} color={(pvJourTotal >= 0) ? '#3dd68c' : '#f05656'} bold />
+                  <div style={{ borderTop: '0.5px solid #2a2a36' }}></div>
+                  <FiscRow label="🇫🇷 CAC 40" value={fp(prices['^FCHI']?.changePct || 0)} color={(prices['^FCHI']?.changePct >= 0) ? '#3dd68c' : '#f05656'} />
+                  <FiscRow label="🇺🇸 S&P 500" value={fp(prices['^GSPC']?.changePct || 0)} color={(prices['^GSPC']?.changePct >= 0) ? '#3dd68c' : '#f05656'} />
+                </div>
+              </div>
+
+              {/* Risque */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>Analyse du Risque</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ background: 'rgba(240,86,86,0.1)', padding: 12, borderRadius: 8, border: '1px solid rgba(240,86,86,0.3)' }}>
+                    <p style={{ fontSize: 11, color: '#f05656', textTransform: 'uppercase', marginBottom: 4 }}>Pire chute historique (Max Drawdown)</p>
+                    <p style={{ fontSize: 24, fontWeight: 'bold', color: '#f05656' }}>-{f2(maxDrawdown * 100)} %</p>
+                    <p style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>Baisse maximale subie par ton portefeuille par rapport à son point le plus haut.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Diversification */}
+              <div style={s.card}>
+                <div style={s.cardTitle}>Diversification Réelle</div>
+                <p style={{ fontSize: 13, color: '#ccc', lineHeight: 1.5 }}>
+                  Tu possèdes du S&P 500 et du MSCI World. Attention, le MSCI World est composé à près de <strong>70% d'actions américaines</strong> (qui sont déjà dans le S&P 500). 
+                  Ta corrélation est donc très forte. Pour te diversifier davantage à l'avenir, envisage des ETF <em>Marchés Émergents</em> ou <em>Small Caps</em>.
+                </p>
               </div>
 
             </div>
@@ -256,14 +323,23 @@ function KpiCard({ label, value, color }: any) {
   );
 }
 
+function FiscRow({ label, value, color, bold }: any) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <span style={{ fontSize: 13, color: '#aaa' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: bold ? 600 : 400, color: color || '#f0f0f2' }}>{value}</span>
+    </div>
+  );
+}
+
 const s: Record<string, React.CSSProperties> = {
   root: { background: '#0d0d0f', color: '#f0f0f2', minHeight: '100vh', fontFamily: '-apple-system, sans-serif' },
   header: { padding: '18px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '0.5px solid #1e1e28' },
   logo: { fontSize: 17, fontWeight: 600 },
   sublogo: { fontSize: 11, color: '#555', marginTop: 2 },
   btn: { background: 'rgba(232,164,93,0.1)', border: '0.5px solid rgba(232,164,93,0.4)', color: '#e8a45d', padding: '7px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer' },
-  tabs: { display: 'flex', gap: 2, background: '#161619', padding: '4px 24px 0', borderBottom: '0.5px solid #1e1e28' },
-  tab: { padding: '10px 16px', fontSize: 14, border: 'none', background: 'none', color: '#555', cursor: 'pointer', borderBottom: '2px solid transparent' },
+  tabs: { display: 'flex', gap: 2, background: '#161619', padding: '4px 24px 0', borderBottom: '0.5px solid #1e1e28', overflowX: 'auto' },
+  tab: { padding: '10px 16px', fontSize: 13, border: 'none', background: 'none', color: '#555', cursor: 'pointer', borderBottom: '2px solid transparent', whiteSpace: 'nowrap' },
   tabActive: { color: '#f0f0f2', borderBottomColor: '#e8a45d', fontWeight: 500 },
   page: { padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 1200, margin: '0 auto' },
   heroCard: { background: '#161619', border: '0.5px solid #1e1e28', borderRadius: 14, padding: '18px 20px' },
