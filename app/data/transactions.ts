@@ -2,7 +2,7 @@
 
 export const TRANSACTIONS = [
   // Tes achats initiaux (Base de ton PEA)
-  { date: '2024-04-02', ticker: 'ESE.PA', type: 'ACHAT', qty: 53, prix: 26.27, frais: 0.00 },
+  { date: '2024-04-02', ticker: 'ESE.PA', type: 'ACHAT', qty: 53, prix: 27.89, frais: 0.00 },
   { date: '2024-04-02', ticker: 'DCAM.PA', type: 'ACHAT', qty: 16, prix: 5.17, frais: 0.00 },
 
   // Modèle pour tes prochains achats (à copier-coller le mois prochain) :
