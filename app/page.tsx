@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { POSITIONS, CONFIG, HISTORY } from './data/config';
+import { POSITIONS as BASE_POSITIONS, CONFIG, HISTORY } from './data/config';
+import { TRANSACTIONS, calcPRU, calcQty, calcFraisTotal } from './data/transactions';
 
-// ── Helpers ──────────────────────────────────────────────────
+// ── Helpers Mathématiques & Formatage ─────────────────────────────────────────
 const f2 = (v: any) => Number(v).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const f0 = (v: any) => Math.round(Number(v)).toLocaleString('fr-FR');
 const fp = (v: any) => (v >= 0 ? '+' : '') + Number(v).toFixed(2) + ' %';
@@ -14,22 +15,40 @@ const fdate = (iso: string) => {
 const daysBetween = (d1: string | Date, d2: string | Date) => (new Date(d2).getTime() - new Date(d1).getTime()) / 86400000;
 const yearsBetween = (d1: string | Date, d2: string | Date) => daysBetween(d1, d2) / 365.25;
 
+const randomNormal = () => {
+  let u = 0, v = 0;
+  while(u === 0) u = Math.random();
+  while(v === 0) v = Math.random();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+};
+
 export default function Home() {
   const [prices, setPrices] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   
-  // States Outils
   const [simMensuel, setSimMensuel] = useState(150);
-  const [calcEtf, setCalcEtf] = useState(POSITIONS[0]?.ticker || '');
-  const [calcQty, setCalcQty] = useState(0);
-  const [calcPrice, setCalcPrice] = useState(0);
+  const [crashPct, setCrashPct] = useState(30);
 
   const evoChartRef = useRef<HTMLCanvasElement>(null);
   const projChartRef = useRef<HTMLCanvasElement>(null);
+  const mcChartRef = useRef<HTMLCanvasElement>(null);
+  
   const evoChartInst = useRef<any>(null);
   const projChartInst = useRef<any>(null);
+  const mcChartInst = useRef<any>(null);
+
+  // CONNEXION AU JOURNAL DES TRANSACTIONS
+  const POSITIONS = BASE_POSITIONS.map(p => {
+    const calculatedQty = calcQty(p.ticker);
+    const calculatedPru = calcPRU(p.ticker);
+    return {
+      ...p,
+      qty: calculatedQty > 0 ? calculatedQty : p.qty,
+      pru: calculatedPru > 0 ? calculatedPru : p.pru
+    };
+  });
 
   const fetchPrices = useCallback(async () => {
     setLoading(true);
@@ -77,9 +96,6 @@ export default function Home() {
   const capitalDepose = CONFIG.capitalInitial;
   const performancePct = capitalDepose > 0 ? (totalValeurPF - capitalDepose) / capitalDepose : 0;
   const pvJourTotal = positions.reduce((s, p) => s + p.pvJour, 0);
-  
-  const targetPos = positions.find(p => p.ticker === calcEtf);
-  const newPru = targetPos && calcQty > 0 ? ((targetPos.qty * targetPos.pru) + (calcQty * calcPrice)) / (targetPos.qty + calcQty) : 0;
 
   const gainsBruts = totalPL;
   const fiscalite5ans = Math.max(0, gainsBruts) * 0.172;
@@ -93,6 +109,10 @@ export default function Home() {
     if (drawdown > maxDrawdown) maxDrawdown = drawdown;
   });
 
+  const valeurPostCrash = totalValeurPF * (1 - crashPct / 100);
+  const perteCrash = totalValeurPF - valeurPostCrash;
+  const moisRecuperation = Math.ceil(Math.log(totalValeurPF / valeurPostCrash) / Math.log(1 + 0.08 / 12));
+
   const projeter = (taux: number) => {
     let v = totalValeurPF;
     const res = [];
@@ -104,53 +124,88 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (activeTab === 'dashboard') {
-        import('chart.js/auto').then((mod) => {
-        const Chart = mod.default || mod.Chart;
-        if (evoChartInst.current) evoChartInst.current.destroy();
-        if (evoChartRef.current) {
-            const sortedHist = [...HISTORY].sort((a, b) => a.mois.localeCompare(b.mois));
-            evoChartInst.current = new Chart(evoChartRef.current, {
-            type: 'line',
-            data: {
-                labels: sortedHist.map((h) => fdate(h.mois)),
-                datasets: [
-                { label: 'Valeur', data: sortedHist.map((h) => h.valeur), borderColor: '#e8a45d', backgroundColor: 'rgba(232,164,93,0.1)', fill: true, tension: 0.4 },
-                { label: 'Capital', data: sortedHist.map((h) => h.depot), borderColor: '#3a3a4a', borderDash: [5, 5], fill: false }
-                ]
-            },
-            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
-            });
-        }
-        });
-    }
+    import('chart.js/auto').then((mod) => {
+      const Chart = mod.default || mod.Chart;
 
-    if (activeTab === 'outils') {
-        import('chart.js/auto').then((mod) => {
-        const Chart = mod.default || mod.Chart;
-        if (projChartInst.current) projChartInst.current.destroy();
-        if (projChartRef.current) {
-            projChartInst.current = new Chart(projChartRef.current, {
-            type: 'line',
-            data: {
-                labels: Array.from({length: 16}, (_, i) => new Date().getFullYear() + i),
-                datasets: [
-                { label: 'Optimiste (12%)', data: projeter(12), borderColor: '#3dd68c', borderDash: [2, 2], tension: 0.4, pointRadius: 0 },
-                { label: 'Réaliste (8%)', data: projeter(8), borderColor: '#e8a45d', tension: 0.4, borderWidth: 3 },
-                { label: 'Pessimiste (5%)', data: projeter(5), borderColor: '#f05656', borderDash: [2, 2], tension: 0.4, pointRadius: 0 }
-                ]
-            },
-            options: { responsive: true, maintainAspectRatio: false }
-            });
-        }
+      if (activeTab === 'dashboard' && evoChartRef.current) {
+        if (evoChartInst.current) evoChartInst.current.destroy();
+        const sortedHist = [...HISTORY].sort((a, b) => a.mois.localeCompare(b.mois));
+        evoChartInst.current = new Chart(evoChartRef.current, {
+          type: 'line',
+          data: {
+            labels: sortedHist.map((h) => fdate(h.mois)),
+            datasets: [
+              { label: 'Valeur', data: sortedHist.map((h) => h.valeur), borderColor: '#e8a45d', backgroundColor: 'rgba(232,164,93,0.1)', fill: true, tension: 0.4 },
+              { label: 'Capital', data: sortedHist.map((h) => h.depot), borderColor: '#3a3a4a', borderDash: [5, 5], fill: false }
+            ]
+          },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
         });
-    }
+      }
+
+      if (activeTab === 'outils' && projChartRef.current) {
+        if (projChartInst.current) projChartInst.current.destroy();
+        projChartInst.current = new Chart(projChartRef.current, {
+          type: 'line',
+          data: {
+            labels: Array.from({length: 16}, (_, i) => new Date().getFullYear() + i),
+            datasets: [
+              { label: 'Optimiste (12%)', data: projeter(12), borderColor: '#3dd68c', borderDash: [2, 2], tension: 0.4, pointRadius: 0 },
+              { label: 'Réaliste (8%)', data: projeter(8), borderColor: '#e8a45d', tension: 0.4, borderWidth: 3 },
+              { label: 'Pessimiste (5%)', data: projeter(5), borderColor: '#f05656', borderDash: [2, 2], tension: 0.4, pointRadius: 0 }
+            ]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+      }
+
+      if (activeTab === 'analyse' && mcChartRef.current) {
+        if (mcChartInst.current) mcChartInst.current.destroy();
+        const years = 15;
+        const drift = 0.08 / 12; 
+        const vol = 0.15 / Math.sqrt(12); 
+        let simulations = [];
+        
+        for(let s=0; s<100; s++) {
+          let path = [totalValeurPF];
+          let currentVal = totalValeurPF;
+          for(let m=1; m<=years*12; m++) {
+            let shock = randomNormal();
+            currentVal = currentVal * (1 + drift + vol * shock) + simMensuel;
+            if(m % 12 === 0) path.push(currentVal); 
+          }
+          simulations.push(path);
+        }
+
+        const p10 = [], p50 = [], p90 = [];
+        for(let y=0; y<=years; y++) {
+          let yearVals = simulations.map(sim => sim[y]).sort((a,b) => a-b);
+          p10.push(yearVals[Math.floor(100 * 0.10)]);
+          p50.push(yearVals[Math.floor(100 * 0.50)]);
+          p90.push(yearVals[Math.floor(100 * 0.90)]);
+        }
+
+        mcChartInst.current = new Chart(mcChartRef.current, {
+          type: 'line',
+          data: {
+            labels: Array.from({length: years+1}, (_, i) => new Date().getFullYear() + i),
+            datasets: [
+              { label: 'Scénario Top 10%', data: p90, borderColor: '#3dd68c', backgroundColor: 'rgba(61,214,140,0.1)', fill: '+1', tension: 0.4, pointRadius: 0, borderWidth: 1 },
+              { label: 'Médiane (50%)', data: p50, borderColor: '#e8a45d', tension: 0.4, borderWidth: 3 },
+              { label: 'Scénario Pire 10%', data: p10, borderColor: '#f05656', backgroundColor: 'rgba(240,86,86,0.1)', fill: '-1', tension: 0.4, pointRadius: 0, borderWidth: 1 }
+            ]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+      }
+    });
 
     return () => {
       if (evoChartInst.current) evoChartInst.current.destroy();
       if (projChartInst.current) projChartInst.current.destroy();
+      if (mcChartInst.current) mcChartInst.current.destroy();
     };
-  }, [activeTab, prices, simMensuel]);
+  }, [activeTab, prices, simMensuel, totalValeurPF]);
 
   return (
       <div style={s.root}>
@@ -165,6 +220,7 @@ export default function Home() {
         <div style={s.tabs}>
           <button style={{ ...s.tab, ...(activeTab === 'dashboard' ? s.tabActive : {}) }} onClick={() => setActiveTab('dashboard')}>Tableau de bord</button>
           <button style={{ ...s.tab, ...(activeTab === 'positions' ? s.tabActive : {}) }} onClick={() => setActiveTab('positions')}>Positions</button>
+          <button style={{ ...s.tab, ...(activeTab === 'transactions' ? s.tabActive : {}) }} onClick={() => setActiveTab('transactions')}>Transactions</button>
           <button style={{ ...s.tab, ...(activeTab === 'fiscalite' ? s.tabActive : {}) }} onClick={() => setActiveTab('fiscalite')}>Fiscalité</button>
           <button style={{ ...s.tab, ...(activeTab === 'outils' ? s.tabActive : {}) }} onClick={() => setActiveTab('outils')}>Projections</button>
           <button style={{ ...s.tab, ...(activeTab === 'analyse' ? s.tabActive : {}) }} onClick={() => setActiveTab('analyse')}>Analyse Pro 💎</button>
@@ -206,10 +262,40 @@ export default function Home() {
                       <tr key={p.id}>
                         <td style={s.td}>{p.nom} {p.alertDrop && <span title="Baisse > 2% ajd" style={{color: '#f05656'}}>⚠️</span>}</td>
                         <td style={s.td}>{p.qty}</td>
-                        <td style={s.td}>{f2(p.pru)} €</td>
+                        <td style={{ ...s.td, color: '#e8a45d' }}>{f2(p.pru)} €</td>
                         <td style={s.td}>{f2(p.prix)} €</td>
                         <td style={{ ...s.td, color: (p.info.changePct ?? 0) >= 0 ? '#3dd68c' : '#f05656' }}>{fp(p.info.changePct)}</td>
                         <td style={{ ...s.td, color: p.pl >= 0 ? '#3dd68c' : '#f05656' }}>{p.pl >= 0 ? '+' : ''}{f2(p.pl)} €</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* NOUVEAU : TRANSACTIONS */}
+        {activeTab === 'transactions' && (
+          <div style={s.page}>
+            <div style={s.card}>
+              <div style={s.cardTitle}>Journal des Achats</div>
+              <p style={{ fontSize: 12, color: '#aaa', marginBottom: 16 }}>
+                L'application calcule automatiquement ton Prix de Revient Unitaire (PRU) à partir de cet historique. Fini les calculs à la main !
+              </p>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={s.table}>
+                  <thead><tr>{['Date', 'ETF', 'Type', 'Qté', 'Prix Achat', 'Frais', 'Total'].map((h) => <th key={h} style={s.th}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {[...TRANSACTIONS].reverse().map((t, i) => (
+                      <tr key={i} style={{ borderBottom: '0.5px solid #1a1a22' }}>
+                        <td style={s.td}>{new Date(t.date).toLocaleDateString('fr-FR')}</td>
+                        <td style={{ ...s.td, fontWeight: 500 }}>{t.ticker}</td>
+                        <td style={s.td}><span style={{ ...s.badge, ...s.badgeGreen, fontSize: 10 }}>{t.type}</span></td>
+                        <td style={s.td}>{t.qty}</td>
+                        <td style={s.td}>{f2(t.prix)} €</td>
+                        <td style={{ ...s.td, color: '#f05656' }}>{t.frais > 0 ? f2(t.frais) + ' €' : '—'}</td>
+                        <td style={{ ...s.td, fontWeight: 500 }}>{f2((t.qty * t.prix) + t.frais)} €</td>
                       </tr>
                     ))}
                   </tbody>
@@ -227,9 +313,6 @@ export default function Home() {
               <FiscRow label="Plus-value latente brute" value={(gainsBruts >= 0 ? '+' : '') + f2(gainsBruts) + ' €'} color={gainsBruts >= 0 ? '#3dd68c' : '#f05656'} />
               <FiscRow label="Prélèvements sociaux (17,2%)" value={f2(fiscalite5ans) + ' €'} color="#f05656" />
               <FiscRow label="Gain NET (après 5 ans)" value={f2(gainsNets5ans) + ' €'} color="#3dd68c" bold />
-              <div style={{ marginTop: 16, fontSize: 12, color: '#aaa', padding: 12, background: '#1e1e28', borderRadius: 8 }}>
-                Rappel : Les retraits avant 5 ans entraînent la clôture du PEA et une imposition à 30% (PFU).
-              </div>
             </div>
           </div>
         )}
@@ -237,30 +320,11 @@ export default function Home() {
         {/* OUTILS / PROJECTIONS */}
         {activeTab === 'outils' && (
           <div style={s.page}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-              <div style={s.card}>
-                <div style={s.cardTitle}>Calculateur de PRU (Nouvel Achat)</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <select style={s.input} value={calcEtf} onChange={(e) => setCalcEtf(e.target.value)}>
-                    {positions.map(p => <option key={p.ticker} value={p.ticker}>{p.nom}</option>)}
-                  </select>
-                  <input type="number" placeholder="Nombre de parts" style={s.input} onChange={(e) => setCalcQty(Number(e.target.value))} />
-                  <input type="number" placeholder="Prix unitaire d'achat (€)" style={s.input} onChange={(e) => setCalcPrice(Number(e.target.value))} />
-                  {calcQty > 0 && calcPrice > 0 && (
-                    <div style={{ marginTop: 10, padding: 12, background: 'rgba(61,214,140,0.1)', borderRadius: 8, border: '1px solid #3dd68c' }}>
-                      <p style={{ fontSize: 12, color: '#aaa' }}>Nouveau PRU à copier dans config.ts :</p>
-                      <p style={{ fontSize: 24, fontWeight: 'bold', color: '#3dd68c' }}>{f2(newPru)} €</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div style={s.card}>
-                <div style={s.cardTitle}>Simulateur de Projection (15 ans)</div>
-                <label style={{ fontSize: 12, color: '#aaa' }}>Versement mensuel prévu : <strong style={{color: '#fff'}}>{simMensuel} €</strong></label>
-                <input type="range" min="0" max="1000" step="50" value={simMensuel} onChange={(e) => setSimMensuel(Number(e.target.value))} style={{ width: '100%', marginTop: 10 }} />
-                <div style={{ height: 220, position: 'relative', marginTop: 16 }}><canvas ref={projChartRef} /></div>
-              </div>
+            <div style={s.card}>
+              <div style={s.cardTitle}>Simulateur de Projection (15 ans)</div>
+              <label style={{ fontSize: 12, color: '#aaa' }}>Versement mensuel prévu : <strong style={{color: '#fff'}}>{simMensuel} €</strong></label>
+              <input type="range" min="0" max="1000" step="50" value={simMensuel} onChange={(e) => setSimMensuel(Number(e.target.value))} style={{ width: '100%', marginTop: 10 }} />
+              <div style={{ height: 220, position: 'relative', marginTop: 16 }}><canvas ref={projChartRef} /></div>
             </div>
           </div>
         )}
@@ -269,6 +333,7 @@ export default function Home() {
         {activeTab === 'analyse' && (
           <div style={s.page}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
+              
               <div style={s.card}>
                 <div style={s.cardTitle}>Comparaison Marché (Aujourd'hui)</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -280,23 +345,26 @@ export default function Home() {
               </div>
 
               <div style={s.card}>
-                <div style={s.cardTitle}>Analyse du Risque</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <div style={{ background: 'rgba(240,86,86,0.1)', padding: 12, borderRadius: 8, border: '1px solid rgba(240,86,86,0.3)' }}>
-                    <p style={{ fontSize: 11, color: '#f05656', textTransform: 'uppercase', marginBottom: 4 }}>Pire chute historique</p>
-                    <p style={{ fontSize: 24, fontWeight: 'bold', color: '#f05656' }}>-{f2(maxDrawdown * 100)} %</p>
-                    <p style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>Baisse maximale subie par rapport à ton point le plus haut.</p>
-                  </div>
+                <div style={s.cardTitle}>Crash Test Boursier</div>
+                <label style={{ fontSize: 12, color: '#aaa' }}>Si le marché chute de : <strong style={{color: '#f05656'}}>-{crashPct}%</strong></label>
+                <input type="range" min="5" max="50" step="1" value={crashPct} onChange={(e) => setCrashPct(Number(e.target.value))} style={{ width: '100%', marginTop: 10 }} />
+                <div style={{ marginTop: 16, background: 'rgba(240,86,86,0.1)', padding: 12, borderRadius: 8, border: '1px solid rgba(240,86,86,0.3)' }}>
+                  <p style={{ fontSize: 11, color: '#f05656', textTransform: 'uppercase' }}>Perte instantanée</p>
+                  <p style={{ fontSize: 24, fontWeight: 'bold', color: '#f05656' }}>-{f0(perteCrash)} €</p>
+                  <p style={{ fontSize: 11, color: '#aaa', marginTop: 4 }}>
+                    Ton solde tomberait à {f0(valeurPostCrash)} €. Il te faudrait environ <strong style={{color:'#fff'}}>{moisRecuperation} mois</strong> pour remonter à zéro.
+                  </p>
                 </div>
               </div>
 
-              <div style={s.card}>
-                <div style={s.cardTitle}>Diversification Réelle</div>
-                <p style={{ fontSize: 13, color: '#ccc', lineHeight: 1.5 }}>
-                  Tu possèdes du S&P 500 et du MSCI World. Le MSCI World est composé à <strong>70% d'actions américaines</strong> (déjà dans le S&P). 
-                  Pour te diversifier davantage, envisage des ETF <em>Marchés Émergents</em> ou <em>Small Caps</em>.
+              <div style={{ ...s.card, gridColumn: '1 / -1' }}>
+                <div style={s.cardTitle}>Simulateur Monte Carlo (15 ans, 100 scénarios)</div>
+                <p style={{ fontSize: 12, color: '#aaa', marginBottom: 12 }}>
+                  Cet algorithme simule 100 futurs possibles. Il révèle tes vraies probabilités de réussite.
                 </p>
+                <div style={{ height: 300, position: 'relative' }}><canvas ref={mcChartRef} /></div>
               </div>
+
             </div>
           </div>
         )}
