@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { POSITIONS, CONFIG, HISTORY } from './data/config';
 
-// ── HELPERS ──────────────────────────────────────────────────
 const f2 = (v: any) => Number(v).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const f0 = (v: any) => Math.round(Number(v)).toLocaleString('fr-FR');
 const fp = (v: any) => (v >= 0 ? '+' : '') + Number(v).toFixed(2) + ' %';
@@ -15,39 +14,34 @@ const randomNormal = () => {
 };
 
 export default function Home() {
+  const [isMounted, setIsMounted] = useState(false);
   const [activeTab, setActiveTab] = useState('budget'); 
   const [prices, setPrices] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
   
-  // -- ÉTATS BUDGET (Valeurs par défaut pour éviter l'erreur serveur) --
   const [salaire, setSalaire] = useState(239);
   const [depenses, setDepenses] = useState<any[]>([]);
   const [inputMontant, setInputMontant] = useState('');
   const [inputNote, setInputNote] = useState('');
   const [simMensuel, setSimMensuel] = useState(150);
-  
-  // Protection de la sauvegarde
-  const [isLoaded, setIsLoaded] = useState(false);
 
   const mcChartRef = useRef<HTMLCanvasElement>(null);
   const mcChartInst = useRef<any>(null);
 
-  // 1. Charger la mémoire après le premier affichage (Zéro erreur d'hydratation)
   useEffect(() => {
+    setIsMounted(true);
     const saved = localStorage.getItem('mathis_depenses');
     if (saved) setDepenses(JSON.parse(saved));
     const savedSal = localStorage.getItem('mathis_salaire');
     if (savedSal) setSalaire(Number(savedSal));
-    setIsLoaded(true);
   }, []);
 
-  // 2. Sauvegarder uniquement quand c'est bien chargé
   useEffect(() => {
-    if (isLoaded) {
+    if (isMounted) {
       localStorage.setItem('mathis_depenses', JSON.stringify(depenses));
       localStorage.setItem('mathis_salaire', salaire.toString());
     }
-  }, [depenses, salaire, isLoaded]);
+  }, [depenses, salaire, isMounted]);
 
   const totalDepenses = depenses.reduce((s, d) => s + d.montant, 0);
   const resteAVivre = salaire - totalDepenses;
@@ -63,8 +57,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => { 
-    fetchPrices(); 
-  }, [fetchPrices]);
+    if (isMounted) fetchPrices(); 
+  }, [fetchPrices, isMounted]);
 
   const positions = POSITIONS.map((p) => {
     const info = prices[p.ticker] || {};
@@ -87,11 +81,11 @@ export default function Home() {
     if(confirm('Es-tu sûr de vouloir vider l\'historique ?')) setDepenses([]);
   };
 
-  // -- GRAPHIQUE MONTE CARLO --
   useEffect(() => {
     if (activeTab === 'analyse' && mcChartRef.current) {
-        import('chart.js/auto').then((mod) => {
-            const ChartJS: any = mod.default || (mod as any).Chart;
+        import('chart.js/auto').then((module: any) => {
+            // C'est ici que l'on trompe TypeScript !
+            const GraphMoteur = module.default || module.Chart;
             if (mcChartInst.current) mcChartInst.current.destroy();
             
             let simulations = [];
@@ -109,7 +103,7 @@ export default function Home() {
                 p10.push(vals[10]); p50.push(vals[50]); p90.push(vals[90]);
             }
 
-            mcChartInst.current = new ChartJS(mcChartRef.current, {
+            mcChartInst.current = new GraphMoteur(mcChartRef.current, {
                 type: 'line',
                 data: {
                     labels: Array.from({length: 16}, (_, i) => new Date().getFullYear() + i),
@@ -124,6 +118,8 @@ export default function Home() {
         });
     }
   }, [activeTab, simMensuel, totalValeurPF]);
+
+  if (!isMounted) return <div style={{ background: '#050505', color: '#fff', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Chargement...</div>;
 
   return (
     <div style={s.root}>
@@ -159,14 +155,8 @@ export default function Home() {
             </div>
 
             <div style={s.kpiGrid}>
-                <div style={s.kpiCard}>
-                  <div style={s.kpiLabel}>Revenus</div>
-                  <input type="number" style={{...s.kpiVal, background: 'none', border: 'none', color: '#fff', width: '100%'}} value={salaire} onChange={(e) => setSalaire(Number(e.target.value))} />
-                </div>
-                <div style={s.kpiCard}>
-                  <div style={s.kpiLabel}>Dépensé</div>
-                  <div style={{...s.kpiVal, color: '#f05656'}}>{f2(totalDepenses)} €</div>
-                </div>
+                <div style={s.kpiCard}><div style={s.kpiLabel}>Revenus</div><input type="number" style={{...s.kpiVal, background: 'none', border: 'none', color: '#fff', width: '100%'}} value={salaire} onChange={(e) => setSalaire(Number(e.target.value))} /></div>
+                <div style={s.kpiCard}><div style={s.kpiLabel}>Dépensé</div><div style={{...s.kpiVal, color: '#f05656'}}>{f2(totalDepenses)} €</div></div>
             </div>
 
             <div style={s.card}>
@@ -184,7 +174,7 @@ export default function Home() {
 
         {activeTab === 'pea' && (
           <div style={s.card}>
-            <div style={{...s.heroVal, textAlign: 'center', marginBottom: 20}}>{f2(totalValeurPF)} €</div>
+            <div style={{fontSize: 32, fontWeight: 800, textAlign: 'center', marginBottom: 20}}>{f2(totalValeurPF)} €</div>
             <table style={s.table}>
               <tbody>
                 {positions.map(p => (
@@ -229,7 +219,6 @@ const s: Record<string, React.CSSProperties> = {
   kpiLabel: { fontSize: 10, color: '#444', marginBottom: 5 },
   kpiVal: { fontSize: 20, fontWeight: 700 },
   historyRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #111' },
-  heroVal: { fontSize: 32, fontWeight: 800 },
   table: { width: '100%', borderCollapse: 'collapse' },
   td: { padding: '10px', fontSize: 14, borderBottom: '1px solid #111' }
 };
