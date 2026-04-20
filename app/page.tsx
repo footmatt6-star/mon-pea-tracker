@@ -1,224 +1,140 @@
 "use client";
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { POSITIONS, CONFIG, HISTORY } from './data/config';
 
-const f2 = (v: any) => Number(v).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const f0 = (v: any) => Math.round(Number(v)).toLocaleString('fr-FR');
-const fp = (v: any) => (v >= 0 ? '+' : '') + Number(v).toFixed(2) + ' %';
+import { useEffect, useState, useCallback } from "react";
+import { POSITIONS, CONFIG, HISTORY } from "./data/config";
 
-const randomNormal = () => {
-  let u = 0, v = 0;
-  while(u === 0) u = Math.random();
-  while(v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-};
+const f2 = (v: any) => Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fp = (v: any) => (v >= 0 ? "+" : "") + Number(v).toFixed(2) + " %";
 
 export default function Home() {
   const [isMounted, setIsMounted] = useState(false);
-  const [activeTab, setActiveTab] = useState('budget'); 
-  const [prices, setPrices] = useState<Record<string, any>>({});
-  const [loading, setLoading] = useState(true);
-  
+  const [activeTab, setActiveTab] = useState("pea");
+  const [prices, setPrices] = useState<any>({});
+
   const [salaire, setSalaire] = useState(239);
   const [depenses, setDepenses] = useState<any[]>([]);
-  const [inputMontant, setInputMontant] = useState('');
-  const [inputNote, setInputNote] = useState('');
-  const [simMensuel, setSimMensuel] = useState(150);
-
-  const mcChartRef = useRef<HTMLCanvasElement>(null);
-  const mcChartInst = useRef<any>(null);
+  const [inputMontant, setInputMontant] = useState("");
+  const [inputNote, setInputNote] = useState("");
 
   useEffect(() => {
     setIsMounted(true);
-    const saved = localStorage.getItem('mathis_depenses');
-    if (saved) setDepenses(JSON.parse(saved));
-    const savedSal = localStorage.getItem('mathis_salaire');
-    if (savedSal) setSalaire(Number(savedSal));
+    const savedD = localStorage.getItem("m_d");
+    if (savedD) setDepenses(JSON.parse(savedD));
+    const savedS = localStorage.getItem("m_s");
+    if (savedS) setSalaire(Number(savedS));
   }, []);
 
   useEffect(() => {
     if (isMounted) {
-      localStorage.setItem('mathis_depenses', JSON.stringify(depenses));
-      localStorage.setItem('mathis_salaire', salaire.toString());
+      localStorage.setItem("m_d", JSON.stringify(depenses));
+      localStorage.setItem("m_s", salaire.toString());
     }
   }, [depenses, salaire, isMounted]);
 
-  const totalDepenses = depenses.reduce((s, d) => s + d.montant, 0);
-  const resteAVivre = salaire - totalDepenses;
-
   const fetchPrices = useCallback(async () => {
-    setLoading(true);
     try {
-      const tickers = [...POSITIONS.map(p => p.ticker), '^FCHI', '^GSPC'].join(',');
-      const res = await fetch(`/api/prices?tickers=${tickers}`);
+      const t = POSITIONS.map((p: any) => p.ticker).join(",");
+      const res = await fetch("/api/prices?tickers=" + t);
       const data = await res.json();
       setPrices(data);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+    } catch (e) {
+      console.error(e);
+    }
   }, []);
 
-  useEffect(() => { 
-    if (isMounted) fetchPrices(); 
+  useEffect(() => {
+    if (isMounted) fetchPrices();
   }, [fetchPrices, isMounted]);
 
-  const positions = POSITIONS.map((p) => {
+  const totalDepenses = depenses.reduce((s: number, d: any) => s + d.montant, 0);
+  const reste = salaire - totalDepenses;
+
+  const myPositions = POSITIONS.map((p: any) => {
     const info = prices[p.ticker] || {};
-    const prix = info.price || p.pru; 
+    const prix = info.price || p.pru;
     const valeur = p.qty * prix;
     const investi = p.qty * p.pru;
     return { ...p, prix, valeur, investi, plPct: investi > 0 ? (valeur - investi) / investi : 0 };
   });
 
-  const totalValeurPF = positions.reduce((s, p) => s + p.valeur, 0) + CONFIG.liquidites;
+  const totalValeurPF = myPositions.reduce((s: number, p: any) => s + p.valeur, 0) + CONFIG.liquidites;
 
-  const ajouterDepense = (cat: string) => {
+  const addDepense = (c: string) => {
     if (!inputMontant) return;
-    const nouvelle = { id: Date.now(), date: new Date().toISOString(), categorie: cat, montant: parseFloat(inputMontant), note: inputNote || cat };
-    setDepenses([nouvelle, ...depenses]);
-    setInputMontant(''); setInputNote('');
+    const n = { id: Date.now(), cat: c, montant: parseFloat(inputMontant), note: inputNote || c };
+    setDepenses([n, ...depenses]);
+    setInputMontant("");
+    setInputNote("");
   };
 
-  const viderLeMois = () => {
-    if(confirm('Es-tu sûr de vouloir vider l\'historique ?')) setDepenses([]);
-  };
-
-  useEffect(() => {
-    if (activeTab === 'analyse' && mcChartRef.current) {
-        import('chart.js/auto').then((module: any) => {
-            // C'est ici que l'on trompe TypeScript !
-            const GraphMoteur = module.default || module.Chart;
-            if (mcChartInst.current) mcChartInst.current.destroy();
-            
-            let simulations = [];
-            for(let s=0; s<100; s++) {
-                let path = [totalValeurPF]; let v = totalValeurPF;
-                for(let m=1; m<=180; m++) {
-                    v = v * (1 + 0.0066 + 0.04 * randomNormal()) + simMensuel;
-                    if(m % 12 === 0) path.push(v);
-                }
-                simulations.push(path);
-            }
-            const p10 = [], p50 = [], p90 = [];
-            for(let y=0; y<=15; y++) {
-                let vals = simulations.map(sim => sim[y]).sort((a,b) => a-b);
-                p10.push(vals[10]); p50.push(vals[50]); p90.push(vals[90]);
-            }
-
-            mcChartInst.current = new GraphMoteur(mcChartRef.current, {
-                type: 'line',
-                data: {
-                    labels: Array.from({length: 16}, (_, i) => new Date().getFullYear() + i),
-                    datasets: [
-                        { label: 'Optimiste', data: p90, borderColor: '#3dd68c', tension: 0.4, pointRadius: 0 },
-                        { label: 'Médian', data: p50, borderColor: '#e8a45d', tension: 0.4, borderWidth: 3 },
-                        { label: 'Pessimiste', data: p10, borderColor: '#f05656', tension: 0.4, pointRadius: 0 },
-                    ]
-                },
-                options: { responsive: true, maintainAspectRatio: false }
-            });
-        });
-    }
-  }, [activeTab, simMensuel, totalValeurPF]);
-
-  if (!isMounted) return <div style={{ background: '#050505', color: '#fff', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Chargement...</div>;
+  if (!isMounted) return null;
 
   return (
-    <div style={s.root}>
-      <div style={s.header}>
-        <div><div style={s.logo}>Hub Mathis 💎</div><div style={s.sublogo}>Finances & PEA</div></div>
-        <div style={{ textAlign: 'right' }}>
-           <div style={{ fontSize: 18, fontWeight: 700, color: resteAVivre >= 0 ? '#3dd68c' : '#f05656' }}>{f2(resteAVivre)} €</div>
-           <div style={{ fontSize: 10, color: '#555' }}>Reste à vivre</div>
+    <div style={{ background: "#050505", color: "#fff", minHeight: "100vh", fontFamily: "sans-serif" }}>
+      <div style={{ padding: "20px", borderBottom: "1px solid #111", display: "flex", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontSize: "20px", fontWeight: "bold" }}>Hub Mathis 🚀</div>
+          <div style={{ fontSize: "12px", color: "#444" }}>Budget & PEA</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ color: reste >= 0 ? "#3dd68c" : "#f05656", fontWeight: "bold" }}>{f2(reste)} €</div>
+          <div style={{ fontSize: "10px" }}>Reste à vivre</div>
         </div>
       </div>
 
-      <div style={s.mainTabs}>
-        <button style={{ ...s.mainTab, ...(activeTab === 'budget' ? s.mainTabActive : {}) }} onClick={() => setActiveTab('budget')}>💰 BUDGET</button>
-        <button style={{ ...s.mainTab, ...(activeTab === 'pea' ? s.mainTabActive : {}) }} onClick={() => setActiveTab('pea')}>📈 PEA</button>
-        <button style={{ ...s.mainTab, ...(activeTab === 'analyse' ? s.mainTabActive : {}) }} onClick={() => setActiveTab('analyse')}>🎲 ANALYSE</button>
+      <div style={{ display: "flex", background: "#0a0a0a" }}>
+        <button style={{ flex: 1, padding: "15px", background: activeTab === "pea" ? "#111" : "none", color: "#fff", border: "none" }} onClick={() => setActiveTab("pea")}>📈 PEA</button>
+        <button style={{ flex: 1, padding: "15px", background: activeTab === "budget" ? "#111" : "none", color: "#fff", border: "none" }} onClick={() => setActiveTab("budget")}>💰 BUDGET</button>
       </div>
 
-      <div style={s.page}>
-        {activeTab === 'budget' && (
-          <>
-            <div style={s.card}>
-              <div style={s.cardTitle}>Dépense rapide</div>
-              <div style={{ display: 'flex', gap: 10, marginBottom: 15 }}>
-                <input type="number" placeholder="€" style={s.input} value={inputMontant} onChange={(e) => setInputMontant(e.target.value)} />
-                <input type="text" placeholder="Note" style={s.input} value={inputNote} onChange={(e) => setInputNote(e.target.value)} />
+      <div style={{ padding: "20px" }}>
+        {activeTab === "pea" ? (
+          <div>
+            <div style={{ background: "#111", padding: "30px", borderRadius: "15px", textAlign: "center", marginBottom: "20px" }}>
+              <div style={{ fontSize: "12px", color: "#555" }}>VALEUR TOTALE</div>
+              <div style={{ fontSize: "32px", fontWeight: "bold" }}>{f2(totalValeurPF)} €</div>
+            </div>
+            {myPositions.map((p: any) => (
+              <div key={p.ticker} style={{ display: "flex", justifyContent: "space-between", padding: "15px 0", borderBottom: "1px solid #111" }}>
+                <span>{p.nom}</span>
+                <span style={{ color: p.plPct >= 0 ? "#3dd68c" : "#f05656" }}>{fp(p.plPct * 100)}</span>
               </div>
-              <div style={s.gridActions}>
-                <button style={{ ...s.actionBtn, background: '#e8a45d22', color: '#e8a45d' }} onClick={() => ajouterDepense('Courses')}>🛒 Courses</button>
-                <button style={{ ...s.actionBtn, background: '#3dd68c22', color: '#3dd68c' }} onClick={() => ajouterDepense('Sorties')}>🍻 Sorties</button>
-                <button style={{ ...s.actionBtn, background: '#a78bfa22', color: '#a78bfa' }} onClick={() => ajouterDepense('Divers')}>🎁 Divers</button>
-                <button style={{ ...s.actionBtn, background: '#f0565622', color: '#f05656' }} onClick={() => ajouterDepense('Fixe')}>🏠 Fixe</button>
-              </div>
-            </div>
-
-            <div style={s.kpiGrid}>
-                <div style={s.kpiCard}><div style={s.kpiLabel}>Revenus</div><input type="number" style={{...s.kpiVal, background: 'none', border: 'none', color: '#fff', width: '100%'}} value={salaire} onChange={(e) => setSalaire(Number(e.target.value))} /></div>
-                <div style={s.kpiCard}><div style={s.kpiLabel}>Dépensé</div><div style={{...s.kpiVal, color: '#f05656'}}>{f2(totalDepenses)} €</div></div>
-            </div>
-
-            <div style={s.card}>
-              <div style={s.cardTitle}>Historique</div>
-              {depenses.map(d => (
-                <div key={d.id} style={s.historyRow}>
-                  <div><div style={{ fontSize: 14 }}>{d.note}</div><div style={{ fontSize: 10, color: '#444' }}>{d.categorie}</div></div>
-                  <div style={{ fontWeight: 600 }}>-{f2(d.montant)} €</div>
-                </div>
-              ))}
-              {depenses.length > 0 && <button onClick={viderLeMois} style={{marginTop: 15, background: 'none', border: 'none', color: '#333', fontSize: 10, cursor: 'pointer'}}>Tout effacer</button>}
-            </div>
-          </>
-        )}
-
-        {activeTab === 'pea' && (
-          <div style={s.card}>
-            <div style={{fontSize: 32, fontWeight: 800, textAlign: 'center', marginBottom: 20}}>{f2(totalValeurPF)} €</div>
-            <table style={s.table}>
-              <tbody>
-                {positions.map(p => (
-                  <tr key={p.id}>
-                    <td style={s.td}>{p.nom}</td>
-                    <td style={s.td}>{f2(p.prix)} €</td>
-                    <td style={{ ...s.td, color: p.plPct >= 0 ? '#3dd68c' : '#f05656' }}>{fp(p.plPct * 100)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            ))}
           </div>
-        )}
-
-        {activeTab === 'analyse' && (
-            <div style={s.card}>
-                <div style={s.cardTitle}>Simulation Monte Carlo</div>
-                <div style={{ height: 300, position: 'relative' }}><canvas ref={mcChartRef} /></div>
+        ) : (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+              <div style={{ background: "#111", padding: "15px", borderRadius: "10px" }}>
+                <div style={{ fontSize: "10px" }}>REVENUS</div>
+                <input type="number" value={salaire} onChange={(e) => setSalaire(Number(e.target.value))} style={{ background: "none", border: "none", color: "#fff", fontSize: "18px", width: "100%" }} />
+              </div>
+              <div style={{ background: "#111", padding: "15px", borderRadius: "10px" }}>
+                <div style={{ fontSize: "10px" }}>DÉPENSÉ</div>
+                <div style={{ color: "#f05656", fontSize: "18px" }}>{f2(totalDepenses)} €</div>
+              </div>
             </div>
+
+            <div style={{ background: "#111", padding: "20px", borderRadius: "15px", marginBottom: "20px" }}>
+              <input type="number" placeholder="Montant €" value={inputMontant} onChange={(e) => setInputMontant(e.target.value)} style={{ width: "100%", padding: "10px", marginBottom: "10px", borderRadius: "5px", border: "1px solid #222", background: "#050505", color: "#fff" }} />
+              <input type="text" placeholder="Note" value={inputNote} onChange={(e) => setInputNote(e.target.value)} style={{ width: "100%", padding: "10px", marginBottom: "15px", borderRadius: "5px", border: "1px solid #222", background: "#050505", color: "#fff" }} />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                <button onClick={() => addDepense("Courses")} style={{ padding: "10px", background: "#3dd68c", border: "none", borderRadius: "5px" }}>🛒 Courses</button>
+                <button onClick={() => addDepense("Sorties")} style={{ padding: "10px", background: "#e8a45d", border: "none", borderRadius: "5px" }}>🍻 Sorties</button>
+                <button onClick={() => addDepense("Divers")} style={{ padding: "10px", background: "#a78bfa", border: "none", borderRadius: "5px" }}>🎁 Divers</button>
+                <button onClick={() => addDepense("Fixe")} style={{ padding: "10px", background: "#f05656", border: "none", borderRadius: "5px" }}>🏠 Fixe</button>
+              </div>
+            </div>
+
+            {depenses.map((d: any) => (
+              <div key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #111" }}>
+                <div><div>{d.note}</div><div style={{ fontSize: "10px", color: "#444" }}>{d.cat}</div></div>
+                <div style={{ fontWeight: "bold" }}>-{f2(d.montant)} €</div>
+              </div>
+            ))}
+            {depenses.length > 0 && <button onClick={() => setDepenses([])} style={{ width: "100%", marginTop: "20px", background: "none", border: "1px solid #222", color: "#444", padding: "10px", borderRadius: "5px" }}>Vider le mois</button>}
+          </div>
         )}
       </div>
     </div>
   );
 }
-
-const s: Record<string, React.CSSProperties> = {
-  root: { background: '#050505', color: '#fff', minHeight: '100vh', fontFamily: '-apple-system, sans-serif' },
-  header: { padding: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #111' },
-  logo: { fontSize: 18, fontWeight: 800 },
-  sublogo: { fontSize: 10, color: '#444' },
-  mainTabs: { display: 'flex', background: '#0a0a0a' },
-  mainTab: { flex: 1, padding: '15px', border: 'none', background: 'none', color: '#444', fontWeight: 600, fontSize: 11, cursor: 'pointer' },
-  mainTabActive: { color: '#fff', borderBottom: '2px solid #e8a45d' },
-  page: { padding: '20px', display: 'flex', flexDirection: 'column', gap: 15, maxWidth: 500, margin: '0 auto' },
-  card: { background: '#0a0a0a', border: '1px solid #111', borderRadius: 16, padding: '20px' },
-  cardTitle: { fontSize: 10, color: '#444', textTransform: 'uppercase', marginBottom: 15, fontWeight: 700 },
-  input: { flex: 1, background: '#111', border: '1px solid #1a1a1a', padding: '12px', borderRadius: 10, color: '#fff', fontSize: 14, width: '100%' },
-  gridActions: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 },
-  actionBtn: { padding: '15px', border: 'none', borderRadius: 12, fontWeight: 600, cursor: 'pointer' },
-  kpiGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 15 },
-  kpiCard: { background: '#0a0a0a', border: '1px solid #111', borderRadius: 16, padding: '15px' },
-  kpiLabel: { fontSize: 10, color: '#444', marginBottom: 5 },
-  kpiVal: { fontSize: 20, fontWeight: 700 },
-  historyRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #111' },
-  table: { width: '100%', borderCollapse: 'collapse' },
-  td: { padding: '10px', fontSize: 14, borderBottom: '1px solid #111' }
-};
