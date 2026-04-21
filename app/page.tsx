@@ -48,7 +48,7 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState(false);
   
   // ================= SÉCURITÉ =================
-  const PIN_SECRET = "0000"; // <-- TON CODE PIN
+  const PIN_SECRET = "0605"; // <-- TON CODE PIN
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
 
