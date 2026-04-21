@@ -48,12 +48,13 @@ export default function Home() {
   const [isMounted, setIsMounted] = useState(false);
   
   // ================= SÉCURITÉ =================
-  const PIN_SECRET = "0605"; // <-- TON CODE PIN
+  const PIN_SECRET = "0000"; // <-- TON CODE PIN
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
 
   const [activeTab, setActiveTab] = useState("pea");
   const [prices, setPrices] = useState<Record<string, any>>({});
+  const [isFetchingPrices, setIsFetchingPrices] = useState(false);
   const [showFabModal, setShowFabModal] = useState(false);
 
   // -- ÉTATS BUDGET --
@@ -92,21 +93,29 @@ export default function Home() {
       }
   };
 
-  // -- API BOURSE --
+  // -- API BOURSE (Avec Refresh Manuel) --
+  const fetchPrices = useCallback(async () => {
+    if (!isUnlocked) return;
+    setIsFetchingPrices(true);
+    try {
+      // On rajoute un paramètre de temps pour empêcher le cache du navigateur
+      const timestamp = new Date().getTime();
+      const tickers = [...POSITIONS.map((p: any) => p.ticker), "^FCHI", "^GSPC"].join(",");
+      const res = await fetch(`/api/prices?tickers=${tickers}&t=${timestamp}`);
+      const data = await res.json();
+      setPrices(data);
+    } catch (e) { 
+      console.error(e); 
+    } finally {
+      setIsFetchingPrices(false);
+    }
+  }, [isUnlocked]);
+
   useEffect(() => {
-    let isActive = true;
-    const fetchPrices = async () => {
-      if (!isUnlocked) return;
-      try {
-        const tickers = [...POSITIONS.map((p: any) => p.ticker), "^FCHI", "^GSPC"].join(",");
-        const res = await fetch(`/api/prices?tickers=${tickers}`);
-        const data = await res.json();
-        if (isActive) setPrices(data);
-      } catch (e) { console.error(e); }
-    };
-    if (isMounted) fetchPrices();
-    return () => { isActive = false; };
-  }, [isMounted, isUnlocked]);
+    if (isMounted && isUnlocked) {
+      fetchPrices();
+    }
+  }, [isMounted, isUnlocked, fetchPrices]);
 
   if (!isMounted) return <div style={{ background: "#050505", height: "100vh" }}></div>;
 
@@ -240,6 +249,12 @@ export default function Home() {
       newDate.setMonth(newDate.getMonth() + offset);
       setMoisActuel(newDate.toISOString().slice(0, 7));
   };
+  
+  const changeAnnee = (offset: number) => {
+      const newDate = new Date(dateObjectActuelle);
+      newDate.setFullYear(newDate.getFullYear() + offset);
+      setMoisActuel(newDate.toISOString().slice(0, 7));
+  };
 
   const addDepense = (c: string) => {
     if (!inputMontant) return;
@@ -300,6 +315,14 @@ export default function Home() {
                 <span style={{ padding: "5px 12px", borderRadius: "20px", fontSize: "12px", background: performancePct >= 0 ? "rgba(61,214,140,0.1)" : "rgba(240,86,86,0.1)", color: performancePct >= 0 ? "#3dd68c" : "#f05656", fontWeight: "bold" }}>Global : {fp(performancePct * 100)}</span>
                 <span style={{ padding: "5px 12px", borderRadius: "20px", fontSize: "12px", background: "rgba(167,139,250,0.1)", color: "#a78bfa", fontWeight: "bold" }}>CAGR : {fp(cagr * 100)}</span>
               </div>
+              
+              {/* NOUVEAU BOUTON D'ACTUALISATION */}
+              <button 
+                onClick={fetchPrices} 
+                disabled={isFetchingPrices}
+                style={{ marginTop: "20px", padding: "8px 20px", background: "none", border: "1px solid #333", borderRadius: "20px", color: "#888", fontSize: "12px", cursor: "pointer" }}>
+                {isFetchingPrices ? "Actualisation en cours..." : "🔄 Forcer l'actualisation"}
+              </button>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px" }}>
@@ -373,11 +396,19 @@ export default function Home() {
         ========================================================= */}
         {activeTab === "budget" && (
           <>
-            {/* NAVIGATION MOIS */}
+            {/* NAVIGATION MOIS (FLUIDIFIÉE) */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#111", borderRadius: "15px", padding: "5px", border: "1px solid #222" }}>
-                <button onClick={() => changeMois(-1)} style={{ padding: "15px 25px", background: "none", border: "none", color: "#fff", fontSize: "18px", cursor: "pointer" }}>←</button>
-                <div style={{ fontWeight: "bold", fontSize: "14px", letterSpacing: "1px", color: "#e8a45d" }}>{nomDuMois}</div>
-                <button onClick={() => changeMois(1)} style={{ padding: "15px 25px", background: "none", border: "none", color: "#fff", fontSize: "18px", cursor: "pointer" }}>→</button>
+                <div style={{ display: "flex" }}>
+                  <button onClick={() => changeAnnee(-1)} style={{ padding: "15px 15px", background: "none", border: "none", color: "#555", fontSize: "14px", cursor: "pointer" }}>&laquo;</button>
+                  <button onClick={() => changeMois(-1)} style={{ padding: "15px 15px", background: "none", border: "none", color: "#fff", fontSize: "18px", cursor: "pointer" }}>‹</button>
+                </div>
+                
+                <div style={{ fontWeight: "bold", fontSize: "14px", letterSpacing: "1px", color: "#e8a45d", textAlign: "center", flex: 1 }}>{nomDuMois}</div>
+                
+                <div style={{ display: "flex" }}>
+                  <button onClick={() => changeMois(1)} style={{ padding: "15px 15px", background: "none", border: "none", color: "#fff", fontSize: "18px", cursor: "pointer" }}>›</button>
+                  <button onClick={() => changeAnnee(1)} style={{ padding: "15px 15px", background: "none", border: "none", color: "#555", fontSize: "14px", cursor: "pointer" }}>&raquo;</button>
+                </div>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px" }}>
