@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { POSITIONS, CONFIG, HISTORY } from "./data/config";
 
+// --- HELPERS ---
 const f2 = (v: number) => Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const f0 = (v: number) => Math.round(Number(v)).toLocaleString("fr-FR");
 const fp = (v: number) => (v >= 0 ? "+" : "") + Number(v).toFixed(2) + " %";
@@ -14,6 +15,7 @@ const randomNormal = () => {
   return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 };
 
+// --- MOTEUR GRAPHIQUE SVG NATIF ---
 interface Ligne { data: number[]; color: string; }
 function GraphiqueNatif({ lignes, showXAxis }: { lignes: Ligne[], showXAxis?: boolean }) {
   if (!lignes || !Array.isArray(lignes)) return null;
@@ -44,30 +46,41 @@ function GraphiqueNatif({ lignes, showXAxis }: { lignes: Ligne[], showXAxis?: bo
 
 export default function Home() {
   const [isMounted, setIsMounted] = useState(false);
+  
+  // ================= SÉCURITÉ =================
   const PIN_SECRET = "0000"; 
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
+
   const [activeTab, setActiveTab] = useState("budget"); 
   const [prices, setPrices] = useState<Record<string, any>>({});
   const [isFetchingPrices, setIsFetchingPrices] = useState(false);
   const [showFabModal, setShowFabModal] = useState(false);
+
+  // -- ÉTATS DONNÉES --
   const [salaires, setSalaires] = useState<Record<string, number>>({}); 
   const [depenses, setDepenses] = useState<any[]>([]);
   const [mesPositions, setMesPositions] = useState<any[]>([]); 
+  
+  // -- ÉTATS FORMULAIRES --
   const [inputMontant, setInputMontant] = useState("");
   const [inputNote, setInputNote] = useState("");
+  const [isRecurrente, setIsRecurrente] = useState(false); // NOUVEAU : Récurrence
   const [moisActuel, setMoisActuel] = useState(new Date().toISOString().slice(0, 7)); 
   const [simMensuel, setSimMensuel] = useState(150);
+
   const [showAddETF, setShowAddETF] = useState(false);
   const [etfTicker, setEtfTicker] = useState("");
   const [etfNom, setEtfNom] = useState("");
   const [etfQty, setEtfQty] = useState("");
   const [etfPru, setEtfPru] = useState("");
 
+  // -- MÉMOIRE --
   useEffect(() => {
     setIsMounted(true);
     const savedD = localStorage.getItem("m_d");
     if (savedD) setDepenses(JSON.parse(savedD));
+    
     const savedSalaires = localStorage.getItem("m_salaires");
     if (savedSalaires) {
         setSalaires(JSON.parse(savedSalaires));
@@ -75,9 +88,11 @@ export default function Home() {
         const oldS = localStorage.getItem("m_s");
         if (oldS) setSalaires({ [new Date().toISOString().slice(0, 7)]: Number(oldS) });
     }
+    
     const savedPos = localStorage.getItem("m_positions");
     if (savedPos) setMesPositions(JSON.parse(savedPos));
     else setMesPositions(POSITIONS); 
+    
     const unlocked = sessionStorage.getItem("m_unlocked");
     if (unlocked === "true") setIsUnlocked(true);
   }, []);
@@ -109,10 +124,16 @@ export default function Home() {
       const res = await fetch(`/api/prices?tickers=${tickers}&t=${timestamp}`);
       const data = await res.json();
       setPrices(data);
-    } catch (e) { console.error(e); } finally { setIsFetchingPrices(false); }
+    } catch (e) { 
+      console.error(e); 
+    } finally {
+      setIsFetchingPrices(false);
+    }
   }, [isUnlocked, mesPositions]);
 
-  useEffect(() => { if (isMounted && isUnlocked) fetchPrices(); }, [isMounted, isUnlocked, fetchPrices]);
+  useEffect(() => {
+    if (isMounted && isUnlocked) fetchPrices();
+  }, [isMounted, isUnlocked, fetchPrices]);
 
   if (!isMounted) return <div style={{ background: "#050505", height: "100vh" }}></div>;
 
@@ -127,8 +148,8 @@ export default function Home() {
   }
 
   const exportCSV = () => {
-      const header = "Date,Catégorie,Note,Montant (€)\n";
-      const rows = depenses.map(d => `${d.date.split('T')[0]},${d.cat},${d.note || "Sans note"},${d.montant}`).join("\n");
+      const header = "Date,Catégorie,Note,Montant (€),Recurrent\n";
+      const rows = depenses.map(d => `${d.date.split('T')[0]},${d.cat},${d.note || "Sans note"},${d.montant},${d.recurrent ? 'Oui' : 'Non'}`).join("\n");
       const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
@@ -180,8 +201,28 @@ export default function Home() {
       return 0;
   };
 
+  // --- AUTOMATISATION DES ABONNEMENTS ---
+  // On récupère toutes les dépenses récurrentes passées pour les injecter virtuellement dans ce mois si besoin
   const salaireActuel = getSalaireForMois(moisActuel);
-  const depensesDuMois = depenses.filter(d => d.date.startsWith(moisActuel));
+  const depensesReellesDuMois = depenses.filter(d => d.date.startsWith(moisActuel));
+  
+  // NOUVEAU: Récupère les dépenses récurrentes créées AVANT ce mois
+  const abonnementsPasses = depenses.filter(d => d.recurrent && d.date < moisActuel).reduce((acc, current) => {
+      // Pour éviter les doublons si un abonnement a été modifié, on garde le plus récent par "note"
+      const x = acc.find((item: any) => item.note === current.note);
+      if (!x) return acc.concat([current]);
+      return acc;
+  }, []);
+
+  // Fusionne les réelles et les abonnements projetés (si pas déjà payés ce mois)
+  const depensesDuMois = [...depensesReellesDuMois];
+  abonnementsPasses.forEach((abo: any) => {
+      const dejaPaye = depensesReellesDuMois.some(d => d.note === abo.note && d.cat === abo.cat);
+      if (!dejaPaye) {
+          depensesDuMois.push({ ...abo, id: `auto-${abo.id}`, auto: true });
+      }
+  });
+
   const epargneCats = ["PEA", "Sécurité", "Voyage"];
   const besoinsCats = ["Fixe", "Courses", "Abonnement"];
   const enviesCats = ["Sorties", "Divers"];
@@ -199,6 +240,8 @@ export default function Home() {
   const pctBesoins = salaireActuel > 0 ? (valBesoins / salaireActuel) * 100 : 0;
   const pctEnvies = salaireActuel > 0 ? (valEnvies / salaireActuel) * 100 : 0;
   const pctEpargneReel = salaireActuel > 0 ? (totalEpargneMois / salaireActuel) * 100 : 0;
+
+  const objectifAtteint = pctEpargneReel >= 20;
 
   const budgetCats: any = depensesDuMois.reduce((acc: any, d: any) => { acc[d.cat] = (acc[d.cat] || 0) + d.montant; return acc; }, {});
 
@@ -257,14 +300,31 @@ export default function Home() {
     if (!inputMontant) return;
     const dateDepense = new Date();
     dateDepense.setFullYear(Number(yStr), Number(mStr) - 1);
-    const n = { id: Date.now(), cat: c, montant: parseFloat(inputMontant), note: inputNote || c, date: dateDepense.toISOString() };
+    
+    // Si c'est un abonnement auto qu'on confirme
+    const n = { 
+        id: Date.now(), 
+        cat: c, 
+        montant: parseFloat(inputMontant), 
+        note: inputNote || c, 
+        date: dateDepense.toISOString(),
+        recurrent: isRecurrente
+    };
+    
     setDepenses([n, ...depenses]);
-    setInputMontant(""); setInputNote("");
+    setInputMontant(""); setInputNote(""); setIsRecurrente(false);
     setShowFabModal(false);
   };
 
+  const validerAbonnement = (aboAuto: any) => {
+      // Convertit une dépense auto projetée en vraie dépense
+      const n = { ...aboAuto, id: Date.now(), date: new Date(Number(yStr), Number(mStr)-1, 2).toISOString() };
+      delete n.auto;
+      setDepenses([n, ...depenses]);
+  };
+
   const viderLeMois = () => {
-    if(window.confirm(`Supprimer toutes les opérations de ${nomDuMois} ?`)) {
+    if(window.confirm(`Supprimer TOUTES les opérations réelles de ${nomDuMois} ?`)) {
       setDepenses(depenses.filter(d => !d.date.startsWith(moisActuel)));
     }
   };
@@ -293,7 +353,7 @@ export default function Home() {
           <div style={{ fontSize: "12px", color: "#444", textTransform: "uppercase" }}>Investissement & Budget</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ color: (activeTab === "budget" || activeTab === "bilan") ? (resteMois >= 0 ? "#3dd68c" : "#f05656") : (totalPL >= 0 ? "#3dd68c" : "#f05656"), fontWeight: "bold", fontSize: "18px" }}>
+          <div style={{ color: (activeTab === "budget" || activeTab === "bilan") ? (resteMois >= 0 ? "#3dd68c" : "#f05656") : (totalPL >= 0 ? "#3dd68c" : "#f05656"), fontWeight: "bold", fontSize: "18px", transition: "color 0.3s" }}>
             {(activeTab === "budget" || activeTab === "bilan") ? f2(resteMois) : f2(totalPL)} €
           </div>
           <div style={{ fontSize: "10px", color: "#555" }}>{(activeTab === "budget" || activeTab === "bilan") ? `Reste (${nomDuMois})` : "Plus-Value Globale"}</div>
@@ -340,13 +400,7 @@ export default function Home() {
             <div style={{ background: "#0a0a0a", padding: "15px", borderRadius: "15px", border: "1px solid #111", overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", textAlign: "right" }}>
                 <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Mois</th>
-                    <th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>In</th>
-                    <th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Out</th>
-                    <th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Épargne</th>
-                    <th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Reste</th>
-                  </tr>
+                  <tr><th style={{ textAlign: "left", padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Mois</th><th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>In</th><th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Out</th><th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Épargne</th><th style={{ padding: "10px 5px", color: "#555", borderBottom: "1px solid #222" }}>Reste</th></tr>
                 </thead>
                 <tbody>
                   {bilanAnnuel.map((b) => (
@@ -457,12 +511,23 @@ export default function Home() {
               </div>
             </div>
 
+            {/* GAMIFICATION OBJECTIF */}
+            {objectifAtteint && (
+                <div style={{ background: "linear-gradient(90deg, rgba(61,214,140,0.2) 0%, rgba(61,214,140,0.05) 100%)", padding: "15px", borderRadius: "15px", borderLeft: "4px solid #3dd68c", display: "flex", alignItems: "center", gap: "10px" }}>
+                    <div style={{ fontSize: "24px" }}>🎉</div>
+                    <div>
+                        <div style={{ fontSize: "12px", fontWeight: "bold", color: "#3dd68c" }}>Objectif d'épargne atteint !</div>
+                        <div style={{ fontSize: "10px", color: "#aaa" }}>Tu as épargné plus de 20% de tes revenus ce mois-ci. Continue !</div>
+                    </div>
+                </div>
+            )}
+
             <div style={{ background: "#0a0a0a", padding: "20px", borderRadius: "15px", border: "1px solid #111" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "15px" }}><span style={{ fontSize: "12px", color: "#555", fontWeight: "bold" }}>RÈGLE 50/30/20 (IDÉAL)</span></div>
                 <div style={{ marginBottom: "10px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", marginBottom: "5px" }}><span style={{ color: "#f05656" }}>Besoins ({pctBesoins.toFixed(0)}% / 50%)</span><span style={{ color: "#e8a45d" }}>Envies ({pctEnvies.toFixed(0)}% / 30%)</span><span style={{ color: "#3dd68c" }}>Épargne ({pctEpargneReel.toFixed(0)}% / 20%)</span></div>
                     <div style={{ display: "flex", height: "8px", borderRadius: "4px", overflow: "hidden", background: "#1a1a22", gap: "2px" }}>
-                        <div style={{ width: `${pctBesoins}%`, background: pctBesoins > 50 ? "#f05656" : "#f0565688" }}></div><div style={{ width: `${pctEnvies}%`, background: pctEnvies > 30 ? "#e8a45d" : "#e8a45d88" }}></div><div style={{ width: `${pctEpargneReel}%`, background: pctEpargneReel < 20 ? "#3dd68c88" : "#3dd68c" }}></div>
+                        <div style={{ width: `${pctBesoins}%`, background: pctBesoins > 50 ? "#f05656" : "#f0565688", transition: "width 0.5s ease" }}></div><div style={{ width: `${pctEnvies}%`, background: pctEnvies > 30 ? "#e8a45d" : "#e8a45d88", transition: "width 0.5s ease" }}></div><div style={{ width: `${pctEpargneReel}%`, background: pctEpargneReel < 20 ? "#3dd68c88" : "#3dd68c", transition: "width 0.5s ease" }}></div>
                     </div>
                 </div>
             </div>
@@ -482,8 +547,8 @@ export default function Home() {
                 {dataBarres.map((d) => (
                   <div key={d.label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "5px", height: "100%" }}>
                     <div style={{ height: "100%", display: "flex", alignItems: "flex-end", width: "100%", gap: "2px" }}>
-                      <div style={{ height: `${(d.revenu/maxBarre)*100}%`, width: "100%", background: "#3dd68c", borderRadius: "2px 2px 0 0" }} />
-                      <div style={{ height: `${(d.depense/maxBarre)*100}%`, width: "100%", background: "#f05656", borderRadius: "2px 2px 0 0" }} />
+                      <div style={{ height: `${(d.revenu/maxBarre)*100}%`, width: "100%", background: "#3dd68c", borderRadius: "2px 2px 0 0", transition: "height 0.5s ease" }} />
+                      <div style={{ height: `${(d.depense/maxBarre)*100}%`, width: "100%", background: "#f05656", borderRadius: "2px 2px 0 0", transition: "height 0.5s ease" }} />
                     </div>
                     <div style={{ fontSize: "10px", color: "#555" }}>{d.label}</div>
                   </div>
@@ -498,7 +563,7 @@ export default function Home() {
                       {Object.entries(budgetCats).map(([cat, val]) => {
                         const total = totalDepenseMois + totalEpargneMois;
                         const w = total > 0 ? ((val as number) / total) * 100 : 0;
-                        return <div key={cat} style={{ width: `${w}%`, background: catColors[cat] || "#888" }} />;
+                        return <div key={cat} style={{ width: `${w}%`, background: catColors[cat] || "#888", transition: "width 0.5s ease" }} />;
                       })}
                     </div>
                     <div style={{ display: "flex", gap: "15px", marginTop: "15px", flexWrap: "wrap" }}>
@@ -512,13 +577,27 @@ export default function Home() {
             <div style={{ background: "#0a0a0a", padding: "20px", borderRadius: "15px", border: "1px solid #111" }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "15px" }}><div style={{ fontSize: "12px", color: "#555", fontWeight: "bold" }}>HISTORIQUE ({nomDuMois})</div><button onClick={exportCSV} style={{ background: "none", border: "none", color: "#3b82f6", fontSize: "12px", cursor: "pointer", textDecoration: "underline" }}>📥 Exporter CSV</button></div>
               {depensesDuMois.length === 0 && <div style={{ fontSize: "12px", color: "#555", textAlign: "center", padding: "10px 0" }}>Aucune opération ce mois-ci !</div>}
+              
+              {/* Affichage des abonnements projetés */}
               {depensesDuMois.map((d: any) => (
-                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "12px 0", borderBottom: "1px solid #111" }}>
-                  <div><div style={{ fontSize: "14px" }}>{d.note}</div><div style={{ fontSize: "10px", color: "#555" }}>{new Date(d.date).toLocaleDateString("fr-FR")} - {d.cat}</div></div>
-                  <div style={{ fontWeight: "bold", color: epargneCats.includes(d.cat) ? "#3b82f6" : "#fff" }}>-{f2(d.montant)} €</div>
+                <div key={d.id} style={{ display: "flex", justifyContent: "space-between", padding: "12px 0", borderBottom: "1px solid #111", opacity: d.auto ? 0.5 : 1 }}>
+                  <div>
+                      <div style={{ fontSize: "14px", display: "flex", alignItems: "center", gap: "5px" }}>
+                          {d.note} 
+                          {d.recurrent && !d.auto && <span style={{fontSize: "10px", background: "#333", padding: "2px 5px", borderRadius: "4px"}}>🔄</span>}
+                      </div>
+                      <div style={{ fontSize: "10px", color: "#555" }}>
+                          {d.auto ? "Abonnement prévu" : `${new Date(d.date).toLocaleDateString("fr-FR")} - ${d.cat}`}
+                      </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <div style={{ fontWeight: "bold", color: epargneCats.includes(d.cat) ? "#3b82f6" : "#fff" }}>-{f2(d.montant)} €</div>
+                      {d.auto && <button onClick={() => validerAbonnement(d)} style={{ background: "#3dd68c", border: "none", color: "#000", padding: "5px 10px", borderRadius: "5px", cursor: "pointer", fontSize: "10px", fontWeight: "bold" }}>Valider</button>}
+                  </div>
                 </div>
               ))}
-              {depensesDuMois.length > 0 && <button onClick={viderLeMois} style={{ width: "100%", marginTop: "15px", background: "none", border: "1px solid #222", color: "#555", padding: "10px", borderRadius: "8px", cursor: "pointer" }}>Réinitialiser ce mois</button>}
+              
+              {depensesDuMois.filter(d => !d.auto).length > 0 && <button onClick={viderLeMois} style={{ width: "100%", marginTop: "15px", background: "none", border: "1px solid #222", color: "#555", padding: "10px", borderRadius: "8px", cursor: "pointer" }}>Réinitialiser les dépenses réelles</button>}
             </div>
           </>
         )}
@@ -542,15 +621,21 @@ export default function Home() {
       {showFabModal && (
           <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.8)", zIndex: 1001, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
               <div style={{ background: "#111", width: "100%", maxWidth: "600px", padding: "20px", borderRadius: "20px 20px 0 0", borderTop: "1px solid #333", animation: "slideUp 0.3s ease-out" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "15px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "15px", alignItems: "center" }}>
                       <div style={{ fontWeight: "bold", color: "#e8a45d" }}>NOUVELLE OPÉRATION</div>
                       <button onClick={() => setShowFabModal(false)} style={{ background: "none", border: "none", color: "#fff", fontSize: "20px", cursor: "pointer" }}>✕</button>
                   </div>
                   
                   <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
                     <input type="number" placeholder="€" value={inputMontant} onChange={(e) => setInputMontant(e.target.value)} style={{ flex: 1, padding: "15px", borderRadius: "10px", border: "1px solid #333", background: "#050505", color: "#fff", fontSize: "18px" }} autoFocus />
-                    <input type="text" placeholder="Note (ex: Essence)" value={inputNote} onChange={(e) => setInputNote(e.target.value)} style={{ flex: 2, padding: "15px", borderRadius: "10px", border: "1px solid #333", background: "#050505", color: "#fff", fontSize: "16px" }} />
+                    <input type="text" placeholder="Note (ex: Netflix)" value={inputNote} onChange={(e) => setInputNote(e.target.value)} style={{ flex: 2, padding: "15px", borderRadius: "10px", border: "1px solid #333", background: "#050505", color: "#fff", fontSize: "16px" }} />
                   </div>
+
+                  {/* NOUVEAU: Case à cocher récurrence */}
+                  <label style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px", fontSize: "12px", color: "#aaa", cursor: "pointer" }}>
+                      <input type="checkbox" checked={isRecurrente} onChange={(e) => setIsRecurrente(e.target.checked)} style={{ width: "18px", height: "18px", accentColor: "#e8a45d" }} />
+                      Dépense mensuelle récurrente (Abonnement, Loyer...)
+                  </label>
 
                   <div style={{ fontSize: "10px", color: "#555", marginBottom: "8px", textTransform: "uppercase" }}>Dépenses Courantes</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "15px" }}>

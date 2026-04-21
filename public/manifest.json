@@ -1,0 +1,17 @@
+{
+  "name": "Hub Mathis",
+  "short_name": "Hub",
+  "description": "Mon Hub Financier et Budget",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#e8a45d",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2933/2933116.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
