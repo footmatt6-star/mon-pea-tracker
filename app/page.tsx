@@ -52,7 +52,7 @@ export default function Home() {
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState("");
 
-  const [activeTab, setActiveTab] = useState("pea");
+  const [activeTab, setActiveTab] = useState("budget");
   const [prices, setPrices] = useState<Record<string, any>>({});
   const [isFetchingPrices, setIsFetchingPrices] = useState(false);
   const [showFabModal, setShowFabModal] = useState(false);
@@ -93,12 +93,11 @@ export default function Home() {
       }
   };
 
-  // -- API BOURSE (Avec Refresh Manuel) --
+  // -- API BOURSE --
   const fetchPrices = useCallback(async () => {
     if (!isUnlocked) return;
     setIsFetchingPrices(true);
     try {
-      // On rajoute un paramètre de temps pour empêcher le cache du navigateur
       const timestamp = new Date().getTime();
       const tickers = [...POSITIONS.map((p: any) => p.ticker), "^FCHI", "^GSPC"].join(",");
       const res = await fetch(`/api/prices?tickers=${tickers}&t=${timestamp}`);
@@ -174,10 +173,22 @@ export default function Home() {
   const histValeur = sortedHist.map(h => h.valeur || 0);
   const histDepot = sortedHist.map(h => h.depot || 0);
 
-  // ================= CALCULS BUDGET =================
-  const dateObjectActuelle = new Date(moisActuel + "-01T00:00:00");
+  // ================= GESTION DES MOIS =================
+  const [yStr, mStr] = moisActuel.split("-");
+  const dateObjectActuelle = new Date(Number(yStr), Number(mStr) - 1, 1);
   const nomDuMois = dateObjectActuelle.toLocaleString('fr-FR', { month: 'long', year: 'numeric' }).toUpperCase();
   
+  const changeMois = (offset: number) => {
+      const d = new Date(Number(yStr), (Number(mStr) - 1) + offset, 1);
+      setMoisActuel(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+  
+  const changeAnnee = (offset: number) => {
+      const d = new Date(Number(yStr) + offset, Number(mStr) - 1, 1);
+      setMoisActuel(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+  };
+
+  // ================= CALCULS BUDGET =================
   const depensesDuMois = depenses.filter(d => d.date.startsWith(moisActuel));
   
   const epargneCats = ["PEA", "Sécurité", "Voyage"];
@@ -244,23 +255,10 @@ export default function Home() {
   }
 
   // ================= ACTIONS =================
-  const changeMois = (offset: number) => {
-      const newDate = new Date(dateObjectActuelle);
-      newDate.setMonth(newDate.getMonth() + offset);
-      setMoisActuel(newDate.toISOString().slice(0, 7));
-  };
-  
-  const changeAnnee = (offset: number) => {
-      const newDate = new Date(dateObjectActuelle);
-      newDate.setFullYear(newDate.getFullYear() + offset);
-      setMoisActuel(newDate.toISOString().slice(0, 7));
-  };
-
   const addDepense = (c: string) => {
     if (!inputMontant) return;
     const dateDepense = new Date();
-    const [y, m] = moisActuel.split("-");
-    dateDepense.setFullYear(Number(y), Number(m) - 1);
+    dateDepense.setFullYear(Number(yStr), Number(mStr) - 1);
     
     const n = { id: Date.now(), cat: c, montant: parseFloat(inputMontant), note: inputNote || c, date: dateDepense.toISOString() };
     setDepenses([n, ...depenses]);
@@ -316,7 +314,6 @@ export default function Home() {
                 <span style={{ padding: "5px 12px", borderRadius: "20px", fontSize: "12px", background: "rgba(167,139,250,0.1)", color: "#a78bfa", fontWeight: "bold" }}>CAGR : {fp(cagr * 100)}</span>
               </div>
               
-              {/* NOUVEAU BOUTON D'ACTUALISATION */}
               <button 
                 onClick={fetchPrices} 
                 disabled={isFetchingPrices}
@@ -396,7 +393,7 @@ export default function Home() {
         ========================================================= */}
         {activeTab === "budget" && (
           <>
-            {/* NAVIGATION MOIS (FLUIDIFIÉE) */}
+            {/* NAVIGATION MOIS CORRIGÉE MATHÉMATIQUEMENT */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#111", borderRadius: "15px", padding: "5px", border: "1px solid #222" }}>
                 <div style={{ display: "flex" }}>
                   <button onClick={() => changeAnnee(-1)} style={{ padding: "15px 15px", background: "none", border: "none", color: "#555", fontSize: "14px", cursor: "pointer" }}>&laquo;</button>
