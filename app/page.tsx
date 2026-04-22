@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { POSITIONS, CONFIG, HISTORY } from "./data/config";
+
+// --- INIT SUPABASE ---
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- HELPERS ---
 const f2 = (v: number) => Number(v).toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -55,7 +61,7 @@ export default function Home() {
   const [isFetchingPrices, setIsFetchingPrices] = useState(false);
   const [showFabModal, setShowFabModal] = useState(false);
 
-  // -- ÉTATS DONNÉES --
+  // -- ÉTATS DONNÉES CLOUD --
   const [salaires, setSalaires] = useState<Record<string, number>>({}); 
   const [depenses, setDepenses] = useState<any[]>([]);
   const [mesPositions, setMesPositions] = useState<any[]>([]);
@@ -76,31 +82,43 @@ export default function Home() {
   const [etfQty, setEtfQty] = useState("");
   const [etfPru, setEtfPru] = useState("");
 
-  // -- MÉMOIRE --
+  // -- CHARGEMENT SUPABASE --
   useEffect(() => {
     setIsMounted(true);
-    const savedD = localStorage.getItem("m_d");
-    if (savedD) setDepenses(JSON.parse(savedD));
-    const savedSalaires = localStorage.getItem("m_salaires");
-    if (savedSalaires) setSalaires(JSON.parse(savedSalaires));
-    const savedPos = localStorage.getItem("m_positions");
-    if (savedPos) setMesPositions(JSON.parse(savedPos));
-    else setMesPositions(POSITIONS); 
-    const savedPat = localStorage.getItem("m_patrimoine");
-    if (savedPat) setPatrimoineManuels(JSON.parse(savedPat));
-
     const unlocked = sessionStorage.getItem("m_unlocked");
     if (unlocked === "true") setIsUnlocked(true);
   }, []);
 
   useEffect(() => {
-    if (isMounted) {
-      localStorage.setItem("m_d", JSON.stringify(depenses));
-      localStorage.setItem("m_salaires", JSON.stringify(salaires));
-      localStorage.setItem("m_positions", JSON.stringify(mesPositions));
-      localStorage.setItem("m_patrimoine", JSON.stringify(patrimoineManuels));
+    const loadCloudData = async () => {
+      // Dépenses
+      const { data: dData } = await supabase.from('depenses').select('*').order('date', { ascending: false });
+      if (dData) setDepenses(dData);
+
+      // Salaires
+      const { data: sData } = await supabase.from('salaires').select('*');
+      if (sData) {
+        const sObj = sData.reduce((acc: any, row: any) => ({...acc, [row.mois]: row.montant}), {});
+        setSalaires(sObj);
+      }
+
+      // Positions PEA
+      const { data: pData } = await supabase.from('positions').select('*');
+      if (pData && pData.length > 0) setMesPositions(pData);
+      else setMesPositions(POSITIONS); // Par défaut si vide
+
+      // Patrimoine manuel
+      const { data: patData } = await supabase.from('patrimoine').select('*');
+      if (patData && patData.length > 0) {
+        const patObj = patData.reduce((acc: any, row: any) => ({...acc, [row.cle]: row.valeur}), {});
+        setPatrimoineManuels({...patrimoineManuels, ...patObj});
+      }
+    };
+
+    if (isUnlocked) {
+      loadCloudData();
     }
-  }, [depenses, salaires, mesPositions, patrimoineManuels, isMounted]);
+  }, [isUnlocked]);
 
   const handlePinSubmit = () => {
       if (pinInput === PIN_SECRET) {
@@ -164,7 +182,7 @@ export default function Home() {
   const totalActifsManuels = Object.values(patrimoineManuels).reduce((s, v) => s + v, 0);
   const patrimoineTotalGlobal = totalValeurPF + totalActifsManuels;
 
-  // ================= CALCULS BUDGET & MOIS =================
+  // ================= CALCULS BUDGET =================
   const [yStr, mStr] = moisActuel.split("-");
   const dateObjectActuelle = new Date(Number(yStr), Number(mStr) - 1, 1);
   const nomDuMois = dateObjectActuelle.toLocaleString('fr-FR', { month: 'long', year: 'numeric' }).toUpperCase();
@@ -186,7 +204,7 @@ export default function Home() {
   };
   
   const salaireActuel = getSalaireForMois(moisActuel);
-  const depensesDuMoisReelles = depenses.filter(d => d.date.startsWith(moisActuel));
+  const depensesDuMoisReelles = depenses.filter(d => d.date && d.date.startsWith(moisActuel));
   
   const epargneCats = ["PEA", "Sécurité", "Voyage"];
   const besoinsCats = ["Fixe", "Courses", "Abonnement"];
@@ -199,15 +217,10 @@ export default function Home() {
   const totalDepenseMois = depensesClassiques.reduce((s: number, d: any) => s + d.montant, 0);
   const totalEpargneMois = epargneDuMois.reduce((s: number, d: any) => s + d.montant, 0);
   const resteMois = salaireActuel - totalDepenseMois - totalEpargneMois;
-  const jaugeEpargne = salaireActuel > 0 ? Math.max(0, Math.min(100, (resteMois / salaireActuel) * 100)) : 0;
-
-  const valBesoins = depensesDuMoisReelles.filter(d => besoinsCats.includes(d.cat)).reduce((s, d) => s + d.montant, 0);
-  const valEnvies = depensesDuMoisReelles.filter(d => enviesCats.includes(d.cat)).reduce((s, d) => s + d.montant, 0);
-  const pctBesoins = salaireActuel > 0 ? (valBesoins / salaireActuel) * 100 : 0;
-  const pctEnvies = salaireActuel > 0 ? (valEnvies / salaireActuel) * 100 : 0;
+  const pctBesoins = salaireActuel > 0 ? (depensesDuMoisReelles.filter(d => besoinsCats.includes(d.cat)).reduce((s, d) => s + d.montant, 0) / salaireActuel) * 100 : 0;
+  const pctEnvies = salaireActuel > 0 ? (depensesDuMoisReelles.filter(d => enviesCats.includes(d.cat)).reduce((s, d) => s + d.montant, 0) / salaireActuel) * 100 : 0;
   const pctEpargneReel = salaireActuel > 0 ? (totalEpargneMois / salaireActuel) * 100 : 0;
   const objectifAtteint = pctEpargneReel >= 20;
-
   const budgetCats: any = depensesDuMoisReelles.reduce((acc: any, d: any) => { acc[d.cat] = (acc[d.cat] || 0) + d.montant; return acc; }, {});
 
   // ================= CALCULS CAGNOTTES =================
@@ -218,7 +231,7 @@ export default function Home() {
   // ================= GRAPHIQUES ET BILANS =================
   const derniersMois = Array.from({length: 6}, (_, i) => { const d = new Date(); d.setMonth(d.getMonth() - i); return d.toISOString().slice(0, 7); }).reverse();
   const dataBarres = derniersMois.map(m => {
-      const dep = depenses.filter(d => d.date.startsWith(m) && !epargneCats.includes(d.cat)).reduce((s: number, d: any) => s + d.montant, 0);
+      const dep = depenses.filter(d => d.date && d.date.startsWith(m) && !epargneCats.includes(d.cat)).reduce((s: number, d: any) => s + d.montant, 0);
       return { label: m.split("-")[1], depense: dep, revenu: getSalaireForMois(m) };
   });
   const maxBarre = Math.max(...dataBarres.map(d => Math.max(d.depense, d.revenu)), 1);
@@ -227,7 +240,7 @@ export default function Home() {
   const bilanAnnuel = moisDeLAnnee.map(mIso => {
       const nomM = new Date(mIso + "-01").toLocaleString('fr-FR', { month: 'short' });
       const sal = getSalaireForMois(mIso);
-      const depsM = depenses.filter(d => d.date.startsWith(mIso));
+      const depsM = depenses.filter(d => d.date && d.date.startsWith(mIso));
       const depensesPures = depsM.filter(d => !epargneCats.includes(d.cat)).reduce((s, d) => s + d.montant, 0);
       const epargnePure = depsM.filter(d => epargneCats.includes(d.cat)).reduce((s, d) => s + d.montant, 0);
       const rest = sal - depensesPures - epargnePure;
@@ -254,55 +267,75 @@ export default function Home() {
       if (vals.length >= 91) { p10.push(vals[10]); p50.push(vals[50]); p90.push(vals[90]); }
   }
 
-  // ================= ACTIONS =================
-  const exportCSV = () => {
-    const header = "Date,Catégorie,Note,Montant (€),Recurrent\n";
-    const rows = depenses.map(d => `${d.date.split('T')[0]},${d.cat},${d.note || "Sans note"},${d.montant},${d.recurrent ? 'Oui' : 'Non'}`).join("\n");
-    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `budget_mathis_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
-  };
-
-  const updatePatrimoine = (cle: string, val: string) => {
-      setPatrimoineManuels({ ...patrimoineManuels, [cle]: Number(val) });
+  // ================= ACTIONS CLOUD =================
+  const updatePatrimoine = async (cle: string, val: string) => {
+      const numVal = Number(val);
+      setPatrimoineManuels({ ...patrimoineManuels, [cle]: numVal });
+      await supabase.from('patrimoine').upsert({ cle, valeur: numVal });
   };
   
-  const updateSalaire = (val: string) => {
+  const updateSalaire = async (val: string) => {
     if (val === "") {
         const newSalaires = { ...salaires }; delete newSalaires[moisActuel]; setSalaires(newSalaires);
-    } else { setSalaires({ ...salaires, [moisActuel]: Number(val) }); }
+        await supabase.from('salaires').delete().eq('mois', moisActuel);
+    } else { 
+        setSalaires({ ...salaires, [moisActuel]: Number(val) }); 
+        await supabase.from('salaires').upsert({ mois: moisActuel, montant: Number(val) });
+    }
   };
 
-  const addDepense = (c: string) => {
+  const addDepense = async (c: string) => {
     if (!inputMontant) return;
     const dateDepense = new Date();
     dateDepense.setFullYear(Number(yStr), Number(mStr) - 1);
     const n = { id: Date.now(), cat: c, montant: parseFloat(inputMontant), note: inputNote || c, date: dateDepense.toISOString(), recurrent: isRecurrente };
-    setDepenses([n, ...depenses]);
+    
+    setDepenses([n, ...depenses]); // Update local direct pour la fluidité
+    await supabase.from('depenses').insert([n]); // Sauvegarde Cloud en arrière-plan
+    
     setInputMontant(""); setInputNote(""); setIsRecurrente(false); setShowFabModal(false);
   };
 
-  const viderLeMois = () => {
+  const viderLeMois = async () => {
     if(window.confirm(`Supprimer toutes les opérations de ${nomDuMois} ?`)) {
-      setDepenses(depenses.filter(d => !d.date.startsWith(moisActuel)));
+      const aSupprimer = depenses.filter(d => d.date && d.date.startsWith(moisActuel));
+      const ids = aSupprimer.map(d => d.id);
+      setDepenses(depenses.filter(d => !d.date || !d.date.startsWith(moisActuel)));
+      
+      if (ids.length > 0) {
+        await supabase.from('depenses').delete().in('id', ids);
+      }
     }
   };
 
-  const acheterETF = () => {
+  const acheterETF = async () => {
     if(!etfTicker || !etfQty || !etfPru) return alert("Remplis le Ticker, la Quantité et le Prix d'Achat !");
     const nouvelETF = { nom: etfNom || etfTicker.toUpperCase(), ticker: etfTicker.toUpperCase(), qty: Number(etfQty), pru: Number(etfPru) };
     const exists = mesPositions.findIndex(p => p.ticker === nouvelETF.ticker);
+    let updatedPos = nouvelETF;
+
     if (exists >= 0) {
         const pos = mesPositions[exists];
         const newTotalQty = pos.qty + nouvelETF.qty;
         const newPruMoyen = ((pos.qty * pos.pru) + (nouvelETF.qty * nouvelETF.pru)) / newTotalQty;
         const updated = [...mesPositions];
-        updated[exists] = { ...pos, qty: newTotalQty, pru: newPruMoyen };
+        updatedPos = { ...pos, qty: newTotalQty, pru: newPruMoyen };
+        updated[exists] = updatedPos;
         setMesPositions(updated);
-    } else { setMesPositions([...mesPositions, nouvelETF]); }
+    } else { 
+        setMesPositions([...mesPositions, nouvelETF]); 
+    }
+    
+    await supabase.from('positions').upsert({ ticker: updatedPos.ticker, nom: updatedPos.nom, qty: updatedPos.qty, pru: updatedPos.pru });
     setEtfTicker(""); setEtfNom(""); setEtfQty(""); setEtfPru(""); setShowAddETF(false);
+  };
+
+  const exportCSV = () => {
+    const header = "Date,Catégorie,Note,Montant (€),Recurrent\n";
+    const rows = depenses.map(d => `${d.date?.split('T')[0]},${d.cat},${d.note || "Sans note"},${d.montant},${d.recurrent ? 'Oui' : 'Non'}`).join("\n");
+    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a"); link.href = URL.createObjectURL(blob);
+    link.download = `budget_mathis_${new Date().toISOString().split('T')[0]}.csv`; link.click();
   };
 
   return (
@@ -311,7 +344,7 @@ export default function Home() {
       {/* HEADER FIXE */}
       <div style={{ padding: "20px", display: "flex", justifyContent: "space-between", position: "sticky", top: 0, background: "rgba(5,5,5,0.9)", backdropFilter: "blur(10px)", zIndex: 100, borderBottom: "1px solid #111" }}>
         <div>
-          <div style={{ fontSize: "20px", fontWeight: "bold" }}>Hub Mathis 💎</div>
+          <div style={{ fontSize: "20px", fontWeight: "bold", display: "flex", alignItems: "center", gap: "8px" }}>Hub Mathis 💎 <span style={{fontSize: "10px", background: "#3dd68c", color: "#000", padding: "2px 6px", borderRadius: "10px"}}>Cloud Sync</span></div>
           <div style={{ fontSize: "10px", color: "#444", textTransform: "uppercase" }}>Patrimoine & Finances</div>
         </div>
         <div style={{ textAlign: "right" }}>
